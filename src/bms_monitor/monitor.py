@@ -24,22 +24,45 @@ STATUS_ICON = {"3": "🟢", "2": "🟠", "1": "🟡", "0": "🔴"}
 class Result:
     watch: Watch
     page: MoviePage
+    open: bool = False  # a version this watch covers has shows in the city
+    open_versions: list[Variant] = field(default_factory=list)
     matches: list[tuple[Variant, Show]] = field(default_factory=list)
 
 
+def _variant_from_label(code: str, label: str) -> Variant:
+    language, _, fmt = label.partition("•")
+    return Variant(language.strip(), fmt.strip(), code)
+
+
 def check_watch(client: BmsClient, watch: Watch, pause: Callable[[], None] = lambda: None) -> Result:
+    """Two independent "open" signals, so a page layout we haven't seen can't hide an opening:
+    the movie page's Book tickets versions, and the showtimes API for the watched code itself.
+    """
     page = client.movie_page(watch.movie)
     result = Result(watch, page)
-    if not page.open:
-        return result
     if not page.region:
         raise BmsError("movie page has no region code")
-
-    for variant in variants_to_check(watch, page.variants):
+    referer = watch.movie.page_url
+    variants = page.variants
+    prefetched = {}
+    if not page.open:
         pause()
-        first = client.showtimes(page.region, variant.code, referer=watch.movie.page_url)
+        own = client.showtimes(page.region, watch.movie.code, referer=referer)
+        if not own.open:
+            return result
+        variants = [_variant_from_label(watch.movie.code, own.label)]
+        prefetched[watch.movie.code] = own
+
+    for variant in variants_to_check(watch, variants):
+        if variant.code in prefetched:
+            first = prefetched[variant.code]
+        else:
+            pause()
+            first = client.showtimes(page.region, variant.code, referer=referer)
         if not first.open:
             continue  # listed version without shows in this city yet
+        result.open = True
+        result.open_versions.append(variant)
         wanted = [d for d in first.dates if not watch.dates or d in watch.dates]
         if not watch.dates:
             wanted = wanted[:MAX_DATES]
@@ -47,7 +70,7 @@ def check_watch(client: BmsClient, watch: Watch, pause: Callable[[], None] = lam
         for d in wanted:
             if d != first.date_code:
                 pause()
-                batches.append(client.showtimes(page.region, variant.code, d, referer=watch.movie.page_url))
+                batches.append(client.showtimes(page.region, variant.code, d, referer=referer))
         seen = set()
         for batch in batches:
             for show in batch.shows:
@@ -73,7 +96,7 @@ def _icon(show: Show) -> str:
 
 def opened_message(r: Result) -> str:
     w, e = r.watch, html.escape
-    versions = ", ".join(e(v.label) for v in r.page.variants if v.label) or "listed"
+    versions = ", ".join(e(v.label) for v in r.open_versions if v.label) or "the one you watch"
     lines = [f"🎬 <b>{e(r.page.title)}</b>: booking is open in {e(w.movie.city.title())}",
              f"Versions: {versions}"]
     if not r.matches:
@@ -126,7 +149,7 @@ class Monitor:
                 errors.append(f"{watch.name}: {e}")
                 continue
             log.info("%s: %s, %d matching show(s)", watch.name,
-                     "open" if r.page.open else "not open", len(r.matches))
+                     "open" if r.open else "not open", len(r.matches))
             self.deliver(r)
             results.append(r)
             self.pause()
@@ -138,7 +161,7 @@ class Monitor:
 
     def deliver(self, r: Result) -> None:
         key = r.watch.key
-        if r.page.open and not self.store.was_opened(key):
+        if r.open and not self.store.was_opened(key):
             if self.send(opened_message(r)):
                 self.store.mark_opened(key)
         if not r.matches:
@@ -164,11 +187,31 @@ class Monitor:
             self.store.set_alerted(False)
         self.store.record_success()
 
+    def heartbeat(self, now: time.struct_time | None = None) -> None:
+        """Once a day, after the configured time, say we're alive (silence would look like "not open")."""
+        at = self.settings.heartbeat_at
+        now = now or time.localtime()
+        today = time.strftime("%Y-%m-%d", now)
+        if at is None or now.tm_hour * 100 + now.tm_min < at or self.store.get("heartbeat") == today:
+            return
+        try:
+            names = [w.name for w in load_watches(self.settings.watches_file) if w.enabled]
+        except Exception:
+            names = []
+        failures, _, error, _ = self.store.health()
+        state = "last check OK" if failures == 0 else f"last {failures} checks failed: {error}"
+        msg = f"👀 Still watching {len(names)} movie{'s' if len(names) != 1 else ''} ({state})."
+        if names:
+            msg += "\n" + "\n".join(f"• {html.escape(n)}" for n in names)
+        if self.send(msg):
+            self.store.put("heartbeat", today)
+
     def run_forever(self) -> None:
         while True:
             started = time.monotonic()
             try:
                 self.tick()
+                self.heartbeat()
             except Exception:
                 log.exception("check failed unexpectedly")
                 self._failed("unexpected error, see logs")

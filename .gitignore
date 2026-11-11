@@ -5,6 +5,7 @@ __pycache__/
 cap/
 state.db
 watches.toml
+config/
 .env
 secrets/
 .claude/settings.local.json

@@ -35,9 +35,10 @@ def main(argv: list[str] | None = None) -> int:
             except BmsError as e:
                 print(f"## {watch.name}: CHECK FAILED: {e}\n")
                 continue
-            print(f"## {watch.name}: {'OPEN' if r.page.open else 'not open'} "
-                  f"(region {r.page.region}, {len(r.page.variants)} versions, {len(r.matches)} matching shows)")
-            if r.page.open:
+            print(f"## {r.page.title} [{watch.name}]: {'OPEN' if r.open else 'not open'} "
+                  f"(region {r.page.region}, {len(r.page.variants)} versions listed, "
+                  f"{len(r.open_versions)} watched versions with shows, {len(r.matches)} matching shows)")
+            if r.open:
                 print(opened_message(r))
             if r.matches:
                 print("\n" + shows_message(r, r.matches))

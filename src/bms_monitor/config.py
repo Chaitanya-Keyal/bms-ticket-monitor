@@ -83,6 +83,7 @@ class Settings:
     interval: float
     fail_alert_after: int
     proxy: str | None
+    heartbeat_at: int | None  # HHMM local time (TZ), daily "still watching" message
     telegram_token: str
     telegram_chat_id: str
     telegram_thread_id: str | None
@@ -99,6 +100,7 @@ class Settings:
             interval=float(env.get("BMS_INTERVAL", "60")),
             fail_alert_after=int(env.get("BMS_FAIL_ALERT_AFTER", "5")),
             proxy=env.get("BMS_PROXY") or None,
+            heartbeat_at=_time(env.get("BMS_HEARTBEAT_AT") or None),
             telegram_token=token,
             telegram_chat_id=env.get("TELEGRAM_CHAT_ID", ""),
             telegram_thread_id=env.get("TELEGRAM_THREAD_ID") or None,

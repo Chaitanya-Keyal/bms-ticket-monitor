@@ -1,4 +1,5 @@
-# Local run. Copy watches.example.toml to watches.toml and .env.example to .env first.
+# Local run. First: cp .env.example .env; mkdir config; cp watches.example.toml config/watches.toml
+# (a folder is mounted, not the file, so edits that replace the file are still seen)
 services:
   monitor:
     build: .
@@ -9,7 +10,7 @@ services:
     tmpfs: ["/tmp"]
     restart: unless-stopped
     volumes:
-      - ./watches.toml:/config/watches.toml:ro
+      - ./config:/config:ro
       - data:/data
     mem_limit: 256m
     cpus: 0.5

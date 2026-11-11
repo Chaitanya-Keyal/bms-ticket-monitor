@@ -122,10 +122,25 @@ class FakeClient:
         return parse_showtimes(load(self.st), code)
 
 
-def test_not_open_costs_one_request():
+def test_not_open_costs_a_page_and_one_small_api_call():
     client = FakeClient("page-notopen.html", "showtimes-notopen.json")
     r = check_watch(client, Watch(name="t", movie=MovieRef("hyderabad", "talcum-powder", "ET00521922")))
-    assert not r.page.open and r.matches == [] and client.calls == [("page", "ET00521922")]
+    assert not r.open and r.matches == []
+    assert client.calls == [("page", "ET00521922"), ("showtimes", "ET00521922", "")]
+
+
+def test_api_shows_open_even_when_page_has_no_button():
+    client = FakeClient("page-notopen.html", "showtimes-open.json")
+    r = check_watch(client, Watch(name="t", movie=MovieRef("hyderabad", "talcum-powder", "ET00521922")))
+    assert r.open and r.matches
+    assert r.open_versions == [Variant("Telugu", "2D", "ET00521922")]
+    assert client.calls.count(("showtimes", "ET00521922", "")) == 1  # reused, not fetched twice
+
+
+def test_listed_versions_without_shows_are_not_open():
+    client = FakeClient("page-open.html", "showtimes-notopen.json")
+    r = check_watch(client, watch(languages=["Telugu"]))
+    assert r.page.open and not r.open and r.open_versions == []
 
 
 def test_open_finds_matches_and_trusts_show_dates():
@@ -141,7 +156,7 @@ def test_monitor_sends_once_and_only_marks_after_success(tmp_path):
     wf.write_text('[[watch]]\nname = "R"\nurl = "https://in.bookmyshow.com/hyderabad/movies/ramayana/ET00451914"\n'
                   'languages = ["Telugu"]\nformats = ["2D"]\n')
     from bms_monitor.config import Settings
-    settings = Settings(wf, tmp_path / "s.db", 60, 3, None, "t", "c", None)
+    settings = Settings(wf, tmp_path / "s.db", 60, 3, None, None, "t", "c", None)
     sent, ok = [], [False]
 
     def send(msg):
@@ -163,7 +178,7 @@ def test_failure_alert_after_threshold(tmp_path):
     from bms_monitor.config import Settings
     wf = tmp_path / "watches.toml"
     wf.write_text('[[watch]]\nurl = "https://in.bookmyshow.com/hyderabad/movies/ramayana/ET00451914"\n')
-    settings = Settings(wf, tmp_path / "s.db", 60, 3, None, "t", "c", None)
+    settings = Settings(wf, tmp_path / "s.db", 60, 3, None, None, "t", "c", None)
 
     class Broken:
         def movie_page(self, ref):
@@ -177,7 +192,7 @@ def test_failure_alert_after_threshold(tmp_path):
     assert len(sent) == 1 and "failed 3 times" in sent[0]
     m.client = FakeClient("page-open.html", "showtimes-notopen.json")
     m.tick()
-    assert "working again" in sent[-1] and len(sent) == 3  # plus "booking is open"
+    assert len(sent) == 2 and "working again" in sent[1]
 
 
 def test_watches_file_parsing(tmp_path):
@@ -202,7 +217,25 @@ def test_shows_message_groups_by_day_and_cinema():
     v = Variant("Telugu", "2D", "ET00514068")
     from bms_monitor.monitor import Result
     from bms_monitor.bms import MoviePage
-    r = Result(watch(), MoviePage("ET00514068", "Itllu Arjuna", "HYD", True, [v]), [(v, s) for s in st.shows])
+    r = Result(watch(), MoviePage("ET00514068", "Itllu Arjuna", "HYD", True, [v]),
+               matches=[(v, s) for s in st.shows])
     msg = shows_message(r, r.matches)
     assert "Thu 12 Nov · Telugu 2D" in msg and "ALLU Cinemas: Kokapet:" in msg
     assert "/buytickets/ET00514068/20261112" in msg
+
+
+def test_daily_heartbeat_once_after_time(tmp_path):
+    import time as t
+    from bms_monitor.config import Settings
+    wf = tmp_path / "watches.toml"
+    wf.write_text('[[watch]]\nname = "Dune"\nurl = "https://in.bookmyshow.com/hyderabad/movies/x/ET00000001"\n')
+    settings = Settings(wf, tmp_path / "s.db", 60, 3, None, 1000, "t", "c", None)
+    sent = []
+    m = Monitor(settings, None, Store(settings.state_db), lambda msg: sent.append(msg) or True)
+    m.heartbeat(t.strptime("2026-12-01 09:59", "%Y-%m-%d %H:%M"))
+    assert sent == []
+    m.heartbeat(t.strptime("2026-12-01 10:00", "%Y-%m-%d %H:%M"))
+    m.heartbeat(t.strptime("2026-12-01 18:00", "%Y-%m-%d %H:%M"))
+    assert len(sent) == 1 and "Still watching 1 movie" in sent[0] and "Dune" in sent[0]
+    m.heartbeat(t.strptime("2026-12-02 10:01", "%Y-%m-%d %H:%M"))
+    assert len(sent) == 2

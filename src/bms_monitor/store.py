@@ -25,6 +25,10 @@ create table if not exists health (
     alerted integer not null default 0
 );
 insert or ignore into health (id) values (1);
+create table if not exists meta (
+    key text primary key,
+    value text not null
+);
 """
 
 
@@ -72,6 +76,15 @@ class Store:
 
     def set_alerted(self, alerted: bool) -> None:
         self.db.execute("update health set alerted = ? where id = 1", [int(alerted)])
+        self.db.commit()
+
+    def get(self, key: str) -> str | None:
+        row = self.db.execute("select value from meta where key = ?", [key]).fetchone()
+        return row[0] if row else None
+
+    def put(self, key: str, value: str) -> None:
+        self.db.execute("insert into meta values (?, ?) on conflict (key) do update set value = excluded.value",
+                        [key, value])
         self.db.commit()
 
     def record_success(self) -> None:

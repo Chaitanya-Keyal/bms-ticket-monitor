@@ -9,24 +9,29 @@ cinema, date and show time. It never books anything; it only tells you.
 Every minute (randomised a little), for each watch:
 
 1. Load the movie's page for your city. Until BookMyShow shows the **Book tickets**
-   button there, booking isn't open, and that's the only request made.
+   button there, it also asks the showtimes API about the movie's own code (one
+   small request), so a page layout change can't hide an opening.
 2. Once it's open, the button lists every language/format version with its own
    event code. The versions your filters allow are fetched from the same
    showtimes API the website uses, for your dates (or the first 3 bookable dates).
 3. Each show is matched against your filters. You get:
-   - one **"booking is open"** message per movie and city, listing the versions;
+   - one **"booking is open"** message per movie and city, once a version you
+     watch has shows there, listing those versions;
    - a message for every show matching your filters that you haven't been told
      about yet, grouped by day and cinema, with a booking link. Later cinemas,
      dates and screens trigger new messages; nothing is sent twice.
 4. If checks keep failing (blocked, site changed, network down), you get a
    **"checks are failing"** alert after 5 in a row, and a "working again"
    message when they recover. A failed check never counts as "not open".
+5. Once a day (`BMS_HEARTBEAT_AT`) it sends a short "still watching" message, so
+   a dead server or container can't pass for "not open yet".
 
 State (what was already sent) lives in a small SQLite file.
 
 ## Watches
 
-`watches.toml`, re-read on every check, so edits apply without a restart.
+`config/watches.toml` (the `BMS_WATCHES` path), re-read on every check, so edits apply
+without a restart.
 See [watches.example.toml](watches.example.toml) for every option.
 
 ```toml
@@ -49,7 +54,7 @@ in your city and copying the address.
 
 ```sh
 cp .env.example .env              # bot token + chat id
-cp watches.example.toml watches.toml
+mkdir config && cp watches.example.toml config/watches.toml
 docker compose up -d --build
 ```
 
