@@ -98,7 +98,7 @@ class Settings:
             watches_file=Path(env.get("BMS_WATCHES", "watches.toml")),
             state_db=Path(env.get("BMS_STATE_DB", "state.db")),
             interval=float(env.get("BMS_INTERVAL", "60")),
-            fail_alert_after=int(env.get("BMS_FAIL_ALERT_AFTER", "5")),
+            fail_alert_after=int(env.get("BMS_FAIL_ALERT_AFTER", "3")),
             proxy=env.get("BMS_PROXY") or None,
             heartbeat_at=_time(env.get("BMS_HEARTBEAT_AT") or None),
             telegram_token=token,

@@ -239,3 +239,54 @@ def test_daily_heartbeat_once_after_time(tmp_path):
     assert len(sent) == 1 and "Still watching 1 movie" in sent[0] and "Dune" in sent[0]
     m.heartbeat(t.strptime("2026-12-02 10:01", "%Y-%m-%d %H:%M"))
     assert len(sent) == 2
+
+
+def test_backoff_after_failures(tmp_path):
+    from bms_monitor.config import Settings
+    settings = Settings(tmp_path / "w.toml", tmp_path / "s.db", 60, 3, None, None, "t", "c", None)
+    store = Store(settings.state_db)
+    m = Monitor(settings, None, store, lambda msg: True)
+    assert 51 <= m.next_delay() <= 69
+    store.record_failure("x")
+    assert 102 <= m.next_delay() <= 138
+    for _ in range(5):
+        store.record_failure("x")
+    assert 255 <= m.next_delay() <= 345  # capped at 5 min
+    store.record_success()
+    assert 51 <= m.next_delay() <= 69
+
+
+def test_proxy_falls_back_to_direct_and_retries_later(monkeypatch):
+    from curl_cffi import requests as cr
+    from bms_monitor.bms import BmsClient
+
+    class Resp:
+        status_code = 200
+        text = "ok"
+
+    calls = []
+
+    class FakeSession:
+        def __init__(self, proxied, fail):
+            self.proxied, self.fail = proxied, fail
+
+        def get(self, url, **kw):
+            calls.append("proxy" if self.proxied else "direct")
+            if self.fail:
+                raise cr.RequestsError("proxy down")
+            return Resp()
+
+        def close(self):
+            pass
+
+    proxy_ok = [False]
+    client = BmsClient(proxy="socks5h://home:1080")
+    monkeypatch.setattr(client, "_session", lambda proxied: FakeSession(proxied, proxied and not proxy_ok[0]))
+    client._get("https://example/a")
+    assert calls == ["proxy", "direct"] and client.last_route == "direct"
+    client._get("https://example/b")
+    assert calls[-1] == "direct" and calls.count("proxy") == 1  # not retried for a while
+    proxy_ok[0] = True
+    client._proxy_down_until = 0
+    client._get("https://example/c")
+    assert calls[-1] == "proxy" and client.last_route == "proxy"

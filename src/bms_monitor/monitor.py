@@ -216,5 +216,11 @@ class Monitor:
                 log.exception("check failed unexpectedly")
                 self._failed("unexpected error, see logs")
             elapsed = time.monotonic() - started
-            delay = self.settings.interval * random.uniform(0.85, 1.15) - elapsed
-            time.sleep(max(5.0, delay))
+            time.sleep(max(5.0, self.next_delay() - elapsed))
+
+    def next_delay(self) -> float:
+        """About one interval, randomised. After failures, back off (2x, 4x... up to 5 min)
+        rather than retrying at full speed, which is what turns a hiccup into a block."""
+        failures = self.store.health()[0]
+        base = self.settings.interval * (2 ** min(failures, 4) if failures else 1)
+        return min(max(300.0, self.settings.interval), base) * random.uniform(0.85, 1.15)

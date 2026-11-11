@@ -15,11 +15,15 @@ that can't be understood must never be read as "not open yet".
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from curl_cffi import requests
+
+log = logging.getLogger(__name__)
 
 BASE = "https://in.bookmyshow.com"
 SHOWTIMES_API = BASE + "/api/movies-data/v4/showtimes-by-event/primary-dynamic"
@@ -248,28 +252,58 @@ def parse_showtimes(payload: dict, code: str) -> Showtimes:
 
 
 class BmsClient:
+    """Fetches like one browser would: one cookie session, Chrome's fingerprint, Indian English.
+
+    With a proxy (e.g. a home connection), requests go through it while it works and fall
+    back to a direct connection for a few minutes whenever it can't be reached.
+    """
+
+    PROXY_RETRY_AFTER = 300  # seconds to stay direct after the proxy fails
+
     def __init__(self, proxy: str | None = None, timeout: float = 20):
         self.proxy = proxy
         self.timeout = timeout
-        self._session: requests.Session | None = None
+        self._sessions: dict[bool, requests.Session] = {}
+        self._proxy_down_until = 0.0
+        self.last_route = "direct"
+
+    def _session(self, proxied: bool) -> requests.Session:
+        if proxied not in self._sessions:
+            self._sessions[proxied] = requests.Session(
+                impersonate="chrome", proxy=self.proxy if proxied else None,
+                headers={"Accept-Language": "en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7"})
+        return self._sessions[proxied]
 
     def _get(self, url: str, **kw):
-        if self._session is None:
-            self._session = requests.Session(impersonate="chrome", proxy=self.proxy)
+        if self.proxy and time.monotonic() >= self._proxy_down_until:
+            try:
+                resp = self._session(True).get(url, timeout=self.timeout, **kw)
+                self.last_route = "proxy"
+                return self._check(resp, url, proxied=True)
+            except requests.RequestsError as e:
+                log.warning("proxy unreachable (%s), going direct for %d s", e.__class__.__name__,
+                            self.PROXY_RETRY_AFTER)
+                self._proxy_down_until = time.monotonic() + self.PROXY_RETRY_AFTER
+                self.reset(True)
         try:
-            resp = self._session.get(url, timeout=self.timeout, **kw)
-        except Exception as e:  # network errors, timeouts
-            self.reset()
+            resp = self._session(False).get(url, timeout=self.timeout, **kw)
+        except requests.RequestsError as e:
+            self.reset(False)
             raise BmsError(f"request failed: {e}") from e
+        self.last_route = "direct"
+        return self._check(resp, url, proxied=False)
+
+    def _check(self, resp, url: str, proxied: bool):
         if resp.status_code != 200:
-            self.reset()
-            raise BmsError(f"HTTP {resp.status_code} from {urlparse(url).path}")
+            self.reset(proxied)  # drop cookies that may be marked
+            raise BmsError(f"HTTP {resp.status_code} from {urlparse(url).path} ({'proxy' if proxied else 'direct'})")
         return resp
 
-    def reset(self) -> None:
-        if self._session is not None:
-            self._session.close()
-        self._session = None
+    def reset(self, proxied: bool | None = None) -> None:
+        for key in ([proxied] if proxied is not None else list(self._sessions)):
+            session = self._sessions.pop(key, None)
+            if session is not None:
+                session.close()
 
     def movie_page(self, ref: MovieRef) -> MoviePage:
         return parse_movie_page(self._get(ref.page_url).text, ref.code)

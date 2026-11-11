@@ -20,8 +20,9 @@ Every minute (randomised a little), for each watch:
    - a message for every show matching your filters that you haven't been told
      about yet, grouped by day and cinema, with a booking link. Later cinemas,
      dates and screens trigger new messages; nothing is sent twice.
-4. If checks keep failing (blocked, site changed, network down), you get a
-   **"checks are failing"** alert after 5 in a row, and a "working again"
+4. If checks keep failing (blocked, site changed, network down), checks back off
+   (2, 4, then 5 minutes apart) instead of retrying at full speed, and you get a
+   **"checks are failing"** alert after 3 in a row (about 7 minutes), and a "working again"
    message when they recover. A failed check never counts as "not open".
 5. Once a day (`BMS_HEARTBEAT_AT`) it sends a short "still watching" message, so
    a dead server or container can't pass for "not open yet".
@@ -68,8 +69,10 @@ Settings are environment variables; see [.env.example](.env.example).
 ## Notes
 
 - BookMyShow sits behind Cloudflare's bot protection. Requests use `curl_cffi`
-  with a Chrome fingerprint. Datacenter IPs may still get blocked; `BMS_PROXY`
-  can route BookMyShow requests through another connection (e.g. a home one).
+  with a Chrome fingerprint, one cookie session and Indian English headers.
+  Datacenter IPs may still get blocked; `BMS_PROXY` routes BookMyShow requests
+  through another connection (e.g. a home one) whenever it's reachable and falls
+  back to direct when it isn't.
 - This is a personal tool. It makes one request per watched movie per minute
   until booking opens, and a few more once it's open.
 - Tests run against saved responses in `tests/fixtures`:
