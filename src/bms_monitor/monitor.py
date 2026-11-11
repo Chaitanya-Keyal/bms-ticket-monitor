@@ -130,6 +130,16 @@ class Monitor:
         self.client = client
         self.store = store
         self.send = send
+        self._last_scan: dict[str, float] = {}
+
+    def due(self, watch: Watch) -> bool:
+        """Every tick until booking opens; after the "open" alert, at most every open_interval.
+        The opening is the time-critical part; later scans of every version and date cost the
+        most requests, so they run less often."""
+        last = self._last_scan.get(watch.key)
+        if last is not None and self.store.was_opened(watch.key):
+            return time.monotonic() - last >= self.settings.open_interval * 0.9
+        return True
 
     def pause(self) -> None:
         time.sleep(random.uniform(1.0, 3.0))
@@ -142,6 +152,9 @@ class Monitor:
             return []
         results, errors = [], []
         for watch in watches:
+            if not self.due(watch):
+                continue
+            self._last_scan[watch.key] = time.monotonic()
             try:
                 r = check_watch(self.client, watch, self.pause)
             except BmsError as e:

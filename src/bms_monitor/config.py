@@ -87,6 +87,7 @@ class Settings:
     telegram_token: str
     telegram_chat_id: str
     telegram_thread_id: str | None
+    open_interval: float = 120  # seconds between full scans once a watch's booking is open
 
     @classmethod
     def from_env(cls, env=os.environ) -> "Settings":
@@ -104,4 +105,5 @@ class Settings:
             telegram_token=token,
             telegram_chat_id=env.get("TELEGRAM_CHAT_ID", ""),
             telegram_thread_id=env.get("TELEGRAM_THREAD_ID") or None,
+            open_interval=float(env.get("BMS_OPEN_INTERVAL", "120")),
         )

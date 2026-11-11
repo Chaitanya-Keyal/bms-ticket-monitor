@@ -290,3 +290,21 @@ def test_proxy_falls_back_to_direct_and_retries_later(monkeypatch):
     client._proxy_down_until = 0
     client._get("https://example/c")
     assert calls[-1] == "proxy" and client.last_route == "proxy"
+
+
+def test_open_watches_are_scanned_less_often(tmp_path):
+    from bms_monitor.config import Settings
+    wf = tmp_path / "watches.toml"
+    wf.write_text('[[watch]]\nurl = "https://in.bookmyshow.com/hyderabad/movies/ramayana/ET00451914"\n'
+                  'languages = ["Telugu"]\nformats = ["2D"]\n')
+    settings = Settings(wf, tmp_path / "s.db", 60, 3, None, None, "t", "c", None, open_interval=120)
+    client = FakeClient("page-open.html", "showtimes-open.json")
+    m = Monitor(settings, client, Store(settings.state_db), lambda msg: True)
+    m.pause = lambda: None
+    m.tick()
+    first = len(client.calls)
+    m.tick()  # opened: not due again yet
+    assert len(client.calls) == first
+    m._last_scan = {k: v - 200 for k, v in m._last_scan.items()}
+    m.tick()
+    assert len(client.calls) == 2 * first
