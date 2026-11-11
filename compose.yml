@@ -1,0 +1,18 @@
+# Local run. Copy watches.example.toml to watches.toml and .env.example to .env first.
+services:
+  monitor:
+    build: .
+    env_file: .env
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp"]
+    restart: unless-stopped
+    volumes:
+      - ./watches.toml:/config/watches.toml:ro
+      - data:/data
+    mem_limit: 256m
+    cpus: 0.5
+
+volumes:
+  data: {}

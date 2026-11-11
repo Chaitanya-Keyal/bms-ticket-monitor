@@ -1,0 +1,18 @@
+# One [[watch]] block per movie + city. The file is re-read every check,
+# so edits apply within a minute without a restart.
+#
+# url        BookMyShow movie link (required). The city comes from the link.
+# languages  e.g. ["English", "Hindi"]           (any listed matches; omit for all)
+# formats    e.g. ["IMAX"], ["4DX"], ["LASER"]   (matches the version name or the screen type)
+# cinemas    e.g. ["Prasads", "AMB"]              (part of the cinema name, or its BMS code)
+# dates      e.g. ["2026-12-17", "2026-12-18"]   (omit: the first 3 bookable dates)
+# after, before  e.g. "18:00", "23:59"            (show start time, 24-hour)
+# enabled    false to pause a watch
+
+[[watch]]
+name = "Example movie, IMAX evenings"
+url = "https://in.bookmyshow.com/hyderabad/movies/ramayana/ET00451914"
+languages = ["Hindi"]
+formats = ["3D"]
+dates = ["2026-11-14", "2026-11-15"]
+after = "17:00"

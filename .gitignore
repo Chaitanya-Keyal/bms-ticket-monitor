@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+cap/
+state.db
+watches.toml
+.env
+secrets/
+.claude/settings.local.json

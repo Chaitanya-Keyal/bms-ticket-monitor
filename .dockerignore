@@ -1,0 +1,10 @@
+.git
+.venv
+.claude
+cap
+tests
+scripts
+secrets
+state.db
+watches.toml
+.env
