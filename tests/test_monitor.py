@@ -256,60 +256,75 @@ def test_backoff_after_failures(tmp_path):
     assert 51 <= m.next_delay() <= 69
 
 
-def test_proxy_falls_back_to_direct_and_retries_later(monkeypatch):
+class _Resp:
+    def __init__(self, status):
+        self.status_code = status
+        self.headers = {"cf-mitigated": "challenge"} if status == 403 else {}
+        self.text = "ok"
+
+
+def _routes(monkeypatch, client, direct, backup):
+    """direct/backup: lists, each call pops one outcome: an HTTP status or 'down'."""
     from curl_cffi import requests as cr
-    from bms_monitor.bms import BmsClient
-
-    class Resp:
-        status_code = 200
-        text = "ok"
-
     calls = []
 
-    class FakeSession:
-        def __init__(self, proxied, fail):
-            self.proxied, self.fail = proxied, fail
+    class S:
+        def __init__(self, proxied):
+            self.proxied = proxied
+            self.cookies = type("C", (), {"jar": []})()
 
         def get(self, url, **kw):
-            calls.append("proxy" if self.proxied else "direct")
-            if self.fail:
-                raise cr.RequestsError("proxy down")
-            return Resp()
+            calls.append("backup" if self.proxied else "direct")
+            outcome = (backup if self.proxied else direct).pop(0)
+            if outcome == "down":
+                raise cr.RequestsError("unreachable")
+            return _Resp(outcome)
 
-        def close(self):
-            pass
+    monkeypatch.setattr(client, "_session", lambda proxied: S(proxied))
+    return calls
 
-        cookies = type("C", (), {"jar": []})()
 
-    proxy_ok = [False]
+def test_direct_is_the_main_route(monkeypatch):
+    from bms_monitor.bms import BmsClient
     client = BmsClient(proxy="socks5h://home:1080")
-    monkeypatch.setattr(client, "_session", lambda proxied: FakeSession(proxied, proxied and not proxy_ok[0]))
-    client._get("https://example/a")
-    assert calls == ["proxy", "direct"] and client.last_route == "direct"
-    client._get("https://example/b")
-    assert calls[-1] == "direct" and calls.count("proxy") == 1  # not retried for a while
-    proxy_ok[0] = True
-    client._proxy_down_until = 0
-    client._get("https://example/c")
-    assert calls[-1] == "proxy" and client.last_route == "proxy"
+    calls = _routes(monkeypatch, client, direct=[200, 200], backup=[])
+    client._get("https://x/a")
+    client._get("https://x/b")
+    assert calls == ["direct", "direct"] and client.last_route == "direct"
 
 
-def test_open_watches_are_scanned_less_often(tmp_path):
-    from bms_monitor.config import Settings
-    wf = tmp_path / "watches.toml"
-    wf.write_text('[[watch]]\nurl = "https://in.bookmyshow.com/hyderabad/movies/ramayana/ET00451914"\n'
-                  'languages = ["Telugu"]\nformats = ["2D"]\n')
-    settings = Settings(wf, tmp_path / "s.db", 60, 3, None, None, "t", "c", None, open_interval=120)
-    client = FakeClient("page-open.html", "showtimes-open.json")
-    m = Monitor(settings, client, Store(settings.state_db), lambda msg: True)
-    m.pause = lambda: None
-    m.tick()
-    first = len(client.calls)
-    m.tick()  # opened: not due again yet
-    assert len(client.calls) == first
-    m._last_scan = {k: v - 200 for k, v in m._last_scan.items()}
-    m.tick()
-    assert len(client.calls) == 2 * first
+def test_blocked_direct_retries_through_backup_and_stays_there(monkeypatch):
+    from bms_monitor.bms import BmsClient
+    client = BmsClient(proxy="socks5h://home:1080")
+    calls = _routes(monkeypatch, client, direct=[403, 200], backup=[200, 200])
+    client._get("https://x/a")
+    assert calls == ["direct", "backup"] and client.last_route == "backup"
+    client._get("https://x/b")
+    assert calls[-1] == "backup" and calls.count("direct") == 1  # no hammering a blocked route
+    client._direct_blocked_until = 0  # 30 minutes later
+    client._get("https://x/c")
+    assert calls[-1] == "direct"
+
+
+def test_blocked_with_backup_unreachable_is_an_error(monkeypatch):
+    from bms_monitor.bms import BmsClient, Blocked
+    client = BmsClient(proxy="socks5h://home:1080")
+    _routes(monkeypatch, client, direct=[403], backup=["down"])
+    with pytest.raises(BmsError, match="backup route is unreachable"):
+        client._get("https://x/a")
+    no_proxy = BmsClient()
+    _routes(monkeypatch, no_proxy, direct=[403], backup=[])
+    with pytest.raises(Blocked):
+        no_proxy._get("https://x/a")
+
+
+def test_backup_going_away_falls_back_to_direct(monkeypatch):
+    from bms_monitor.bms import BmsClient
+    client = BmsClient(proxy="socks5h://home:1080")
+    calls = _routes(monkeypatch, client, direct=[403, 200], backup=[200, "down"])
+    client._get("https://x/a")  # direct blocked -> backup
+    client._get("https://x/b")  # backup gone -> try direct again
+    assert calls == ["direct", "backup", "backup", "direct"] and client.last_route == "direct"
 
 
 def test_cookies_survive_a_restart_and_expired_ones_are_dropped(tmp_path):

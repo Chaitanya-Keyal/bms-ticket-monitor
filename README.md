@@ -72,9 +72,10 @@ Settings are environment variables; see [.env.example](.env.example).
 
 - BookMyShow sits behind Cloudflare's bot protection. Requests use `curl_cffi`
   with a Chrome fingerprint, one cookie session and Indian English headers.
-  Datacenter IPs may still get blocked; `BMS_PROXY` routes BookMyShow requests
-  through another connection (e.g. a home one) whenever it's reachable and falls
-  back to direct when it isn't.
+  Cookies are saved, so restarts keep an accepted session. Datacenter IPs may
+  still get blocked; `BMS_PROXY` adds a backup route (e.g. a home connection)
+  that's used only while the direct one is blocked, so direct stays the main,
+  always-warm route.
 - This is a personal tool. It makes one request per watched movie per minute
   until booking opens, and a few more once it's open.
 - Tests run against saved responses in `tests/fixtures`:

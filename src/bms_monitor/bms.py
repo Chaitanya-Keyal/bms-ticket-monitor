@@ -37,6 +37,14 @@ class BmsError(Exception):
     """A request failed or returned something we don't recognise."""
 
 
+class Blocked(BmsError):
+    """BookMyShow (Cloudflare) refused the request: 403, 429 or 503."""
+
+
+class ProxyDown(Exception):
+    """The backup route couldn't be reached."""
+
+
 @dataclass(frozen=True)
 class Variant:
     language: str
@@ -256,12 +264,18 @@ class BmsClient:
     """Fetches like one browser would: one cookie session, Chrome's fingerprint, Indian English.
 
     Cookies are kept like a browser keeps them: across errors, and (with cookie_dir) across
-    restarts, one set per route. With a proxy (e.g. a home connection), requests go through
-    it while it works and fall back to a direct connection for a few minutes when it can't
-    be reached.
+    restarts, one set per route.
+
+    The direct connection is the main route, so its cookies stay fresh. A proxy (e.g. a home
+    connection) is only a backup: when Cloudflare blocks the direct route, the same request
+    is retried through the proxy, and the proxy stays in front until direct is retried
+    DIRECT_RETRY_AFTER seconds later. If the proxy can't be reached it's skipped for
+    PROXY_RETRY_AFTER seconds.
     """
 
-    PROXY_RETRY_AFTER = 300  # seconds to stay direct after the proxy fails
+    PROXY_RETRY_AFTER = 300
+    DIRECT_RETRY_AFTER = 1800
+    BLOCK_STATUSES = (403, 429, 503)
 
     def __init__(self, proxy: str | None = None, timeout: float = 20, cookie_dir: Path | None = None):
         self.proxy = proxy
@@ -269,6 +283,7 @@ class BmsClient:
         self.cookie_dir = cookie_dir
         self._sessions: dict[bool, requests.Session] = {}
         self._proxy_down_until = 0.0
+        self._direct_blocked_until = 0.0
         self.last_route = "direct"
 
     def _cookie_file(self, proxied: bool) -> Path | None:
@@ -286,31 +301,42 @@ class BmsClient:
         return self._sessions[proxied]
 
     def _get(self, url: str, **kw):
-        if self.proxy and time.monotonic() >= self._proxy_down_until:
-            session = self._session(True)
+        now = time.monotonic()
+        proxy_up = bool(self.proxy) and now >= self._proxy_down_until
+        direct_first = not proxy_up or now >= self._direct_blocked_until
+        if direct_first:
             try:
-                resp = session.get(url, timeout=self.timeout, **kw)
-                self.last_route = "proxy"
-                return self._check(resp, url, session, proxied=True)
-            except requests.RequestsError as e:
-                log.warning("proxy unreachable (%s), going direct for %d s", e.__class__.__name__,
-                            self.PROXY_RETRY_AFTER)
-                self._proxy_down_until = time.monotonic() + self.PROXY_RETRY_AFTER
-        session = self._session(False)
+                return self._fetch(False, url, **kw)
+            except Blocked:
+                if not proxy_up:
+                    raise
+                log.warning("direct route blocked, using the backup route for %d s", self.DIRECT_RETRY_AFTER)
+                self._direct_blocked_until = now + self.DIRECT_RETRY_AFTER
+        try:
+            return self._fetch(True, url, **kw)
+        except ProxyDown as e:
+            log.warning("backup route unreachable (%s), skipping it for %d s", e, self.PROXY_RETRY_AFTER)
+            self._proxy_down_until = now + self.PROXY_RETRY_AFTER
+            if direct_first:
+                raise BmsError("blocked on the direct route and the backup route is unreachable") from e
+            return self._fetch(False, url, **kw)
+
+    def _fetch(self, proxied: bool, url: str, **kw):
+        session = self._session(proxied)
+        route = "backup" if proxied else "direct"
         try:
             resp = session.get(url, timeout=self.timeout, **kw)
         except requests.RequestsError as e:
+            if proxied:
+                raise ProxyDown(e.__class__.__name__) from e
             raise BmsError(f"request failed: {e}") from e
-        self.last_route = "direct"
-        return self._check(resp, url, session, proxied=False)
-
-    def _check(self, resp, url: str, session: requests.Session, proxied: bool):
         save_cookies(session, self._cookie_file(proxied))
         if resp.status_code != 200:
-            route = "proxy" if proxied else "direct"
             mitigated = resp.headers.get("cf-mitigated")
-            raise BmsError(f"HTTP {resp.status_code} from {urlparse(url).path} ({route}"
-                           f"{', cloudflare ' + mitigated if mitigated else ''})")
+            msg = (f"HTTP {resp.status_code} from {urlparse(url).path} ({route}"
+                   f"{', cloudflare ' + mitigated if mitigated else ''})")
+            raise Blocked(msg) if resp.status_code in self.BLOCK_STATUSES else BmsError(msg)
+        self.last_route = route
         return resp
 
     def close(self) -> None:
