@@ -29,7 +29,12 @@ Every minute (randomised a little), for each watch:
 5. Once a day (`BMS_HEARTBEAT_AT`) it sends a short "still watching" message, so
    a dead server or container can't pass for "not open yet".
 
-State (what was already sent) lives in a small SQLite file.
+State (what was already sent) lives in a small SQLite file. Next to it, `status.json`
+is rewritten after every check for outside health monitoring: time of the last good
+check, consecutive failures and the last error, the route in use, whether the direct
+route is blocked, and each watch's open/not-open state. With an outside monitor reading
+it, set `BMS_FAIL_ALERT_AFTER=0` and leave `BMS_HEARTBEAT_AT` empty so nothing is
+reported twice.
 
 ## Watches
 

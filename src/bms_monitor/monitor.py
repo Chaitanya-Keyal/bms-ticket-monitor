@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 import logging
 import random
 import time
@@ -131,6 +132,7 @@ class Monitor:
         self.store = store
         self.send = send
         self._last_scan: dict[str, float] = {}
+        self._open: dict[str, bool] = {}
 
     def due(self, watch: Watch) -> bool:
         """Every tick until booking opens; after the "open" alert, at most every open_interval.
@@ -146,10 +148,38 @@ class Monitor:
 
     def tick(self) -> list[Result]:
         try:
+            return self._tick()
+        finally:
+            self.write_status()
+
+    def write_status(self) -> None:
+        """A small JSON file next to the state for outside health checks (read-only for them)."""
+        failures, _, error, _ = self.store.health()
+        last_good = self.store.get("last_good")
+        status = {
+            "updated": int(time.time()),
+            "last_good": int(last_good) if last_good else None,
+            "failures": failures,
+            "last_error": error,
+            "route": getattr(self.client, "last_route", "direct"),
+            "direct_blocked": bool(getattr(self.client, "direct_blocked", False)),
+            "watches": [{"name": n, "open": o} for n, o in self._open.items()],
+        }
+        path = self.settings.state_db.parent / "status.json"
+        try:
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(status))
+            tmp.replace(path)
+        except OSError as e:
+            log.warning("can't write %s: %s", path, e)
+
+    def _tick(self) -> list[Result]:
+        try:
             watches = [w for w in load_watches(self.settings.watches_file) if w.enabled]
         except Exception as e:
             self._failed(f"watches file: {e}")
             return []
+        self._open = {w.name: self._open.get(w.name, False) for w in watches}
         results, errors = [], []
         for watch in watches:
             if not self.due(watch):
@@ -163,6 +193,7 @@ class Monitor:
                 continue
             log.info("%s: %s, %d matching show(s)", watch.name,
                      "open" if r.open else "not open", len(r.matches))
+            self._open[watch.name] = r.open
             self.deliver(r)
             results.append(r)
             self.pause()
@@ -185,9 +216,10 @@ class Monitor:
             self.store.mark_notified(key, [s.key for _, s in new])
 
     def _failed(self, error: str) -> None:
+        """fail_alert_after <= 0 turns the failure alert off (an outside health check owns it)."""
         failures = self.store.record_failure(error)
         _, since, _, alerted = self.store.health()
-        if failures >= self.settings.fail_alert_after and not alerted:
+        if 0 < self.settings.fail_alert_after <= failures and not alerted:
             mins = max(1, round((time.time() - (since or time.time())) / 60))
             msg = (f"⚠️ BookMyShow checks have failed {failures} times in a row (~{mins} min). "
                    f"Alerts can't be trusted until this clears.\n<code>{html.escape(error[:500])}</code>")
@@ -199,6 +231,7 @@ class Monitor:
         if alerted and self.send("✅ BookMyShow checks are working again."):
             self.store.set_alerted(False)
         self.store.record_success()
+        self.store.put("last_good", str(int(time.time())))
 
     def heartbeat(self, now: time.struct_time | None = None) -> None:
         """Once a day, after the configured time, say we're alive (silence would look like "not open")."""
@@ -228,6 +261,7 @@ class Monitor:
             except Exception:
                 log.exception("check failed unexpectedly")
                 self._failed("unexpected error, see logs")
+                self.write_status()
             elapsed = time.monotonic() - started
             time.sleep(max(5.0, self.next_delay() - elapsed))
 

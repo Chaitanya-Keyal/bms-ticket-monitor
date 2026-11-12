@@ -361,3 +361,31 @@ def test_http_errors_keep_the_session(monkeypatch, tmp_path):
         client._get("https://in.bookmyshow.com/x")
     assert client._sessions[False] is session  # cookies kept, not thrown away
     assert (tmp_path / "cookies-direct.json").exists()
+
+
+def test_status_file_for_outside_health_checks(tmp_path):
+    import json
+    from bms_monitor.config import Settings
+    wf = tmp_path / "watches.toml"
+    wf.write_text('[[watch]]\nname = "R"\nurl = "https://in.bookmyshow.com/hyderabad/movies/ramayana/ET00451914"\n'
+                  'languages = ["Telugu"]\n')
+    settings = Settings(wf, tmp_path / "s.db", 60, 0, None, None, "t", "c", None)
+    sent = []
+    m = Monitor(settings, FakeClient("page-open.html", "showtimes-notopen.json"), Store(settings.state_db),
+                lambda msg: sent.append(msg) or True)
+    m.pause = lambda: None
+    m.tick()
+    st = json.loads((tmp_path / "status.json").read_text())
+    assert st["failures"] == 0 and st["last_good"] and st["route"] == "direct" and not st["direct_blocked"]
+    assert st["watches"] == [{"name": "R", "open": False}]
+
+    class Broken:
+        def movie_page(self, ref):
+            raise BmsError("HTTP 403 (direct, cloudflare challenge)")
+
+    m.client = Broken()
+    for _ in range(5):
+        m.tick()
+    st2 = json.loads((tmp_path / "status.json").read_text())
+    assert st2["failures"] == 5 and "challenge" in st2["last_error"] and st2["last_good"] == st["last_good"]
+    assert sent == []  # fail_alert_after = 0: the outside check owns the alert

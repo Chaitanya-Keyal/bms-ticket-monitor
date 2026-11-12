@@ -286,6 +286,11 @@ class BmsClient:
         self._direct_blocked_until = 0.0
         self.last_route = "direct"
 
+    @property
+    def direct_blocked(self) -> bool:
+        """True while the direct route is blocked and requests go through the backup."""
+        return time.monotonic() < self._direct_blocked_until
+
     def _cookie_file(self, proxied: bool) -> Path | None:
         if self.cookie_dir is None:
             return None
