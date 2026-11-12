@@ -279,6 +279,8 @@ def test_proxy_falls_back_to_direct_and_retries_later(monkeypatch):
         def close(self):
             pass
 
+        cookies = type("C", (), {"jar": []})()
+
     proxy_ok = [False]
     client = BmsClient(proxy="socks5h://home:1080")
     monkeypatch.setattr(client, "_session", lambda proxied: FakeSession(proxied, proxied and not proxy_ok[0]))
@@ -308,3 +310,39 @@ def test_open_watches_are_scanned_less_often(tmp_path):
     m._last_scan = {k: v - 200 for k, v in m._last_scan.items()}
     m.tick()
     assert len(client.calls) == 2 * first
+
+
+def test_cookies_survive_a_restart_and_expired_ones_are_dropped(tmp_path):
+    import time as t
+    from curl_cffi import requests as cr
+    from bms_monitor.bms import load_cookies, save_cookies
+    a = cr.Session()
+    a.cookies.set("__cf_bm", "abc", domain=".bookmyshow.com", path="/")
+    a.cookies.set("old", "x", domain=".bookmyshow.com", path="/")
+    save_cookies(a, tmp_path / "c.json")
+    import json
+    data = json.loads((tmp_path / "c.json").read_text())
+    for c in data:
+        if c["name"] == "old":
+            c["expires"] = int(t.time()) - 10
+    (tmp_path / "c.json").write_text(json.dumps(data))
+    b = cr.Session()
+    load_cookies(b, tmp_path / "c.json")
+    names = {c.name: c.value for c in b.cookies.jar}
+    assert names == {"__cf_bm": "abc"}
+
+
+def test_http_errors_keep_the_session(monkeypatch, tmp_path):
+    from bms_monitor.bms import BmsClient
+
+    class Resp:
+        status_code = 403
+        headers = {"cf-mitigated": "challenge"}
+
+    client = BmsClient(cookie_dir=tmp_path)
+    session = client._session(False)
+    monkeypatch.setattr(session, "get", lambda url, **kw: Resp())
+    with pytest.raises(BmsError, match="cloudflare challenge"):
+        client._get("https://in.bookmyshow.com/x")
+    assert client._sessions[False] is session  # cookies kept, not thrown away
+    assert (tmp_path / "cookies-direct.json").exists()

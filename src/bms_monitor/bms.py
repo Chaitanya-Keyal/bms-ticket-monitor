@@ -19,6 +19,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from urllib.parse import urlparse
 
 from curl_cffi import requests
@@ -254,56 +255,68 @@ def parse_showtimes(payload: dict, code: str) -> Showtimes:
 class BmsClient:
     """Fetches like one browser would: one cookie session, Chrome's fingerprint, Indian English.
 
-    With a proxy (e.g. a home connection), requests go through it while it works and fall
-    back to a direct connection for a few minutes whenever it can't be reached.
+    Cookies are kept like a browser keeps them: across errors, and (with cookie_dir) across
+    restarts, one set per route. With a proxy (e.g. a home connection), requests go through
+    it while it works and fall back to a direct connection for a few minutes when it can't
+    be reached.
     """
 
     PROXY_RETRY_AFTER = 300  # seconds to stay direct after the proxy fails
 
-    def __init__(self, proxy: str | None = None, timeout: float = 20):
+    def __init__(self, proxy: str | None = None, timeout: float = 20, cookie_dir: Path | None = None):
         self.proxy = proxy
         self.timeout = timeout
+        self.cookie_dir = cookie_dir
         self._sessions: dict[bool, requests.Session] = {}
         self._proxy_down_until = 0.0
         self.last_route = "direct"
 
+    def _cookie_file(self, proxied: bool) -> Path | None:
+        if self.cookie_dir is None:
+            return None
+        return self.cookie_dir / f"cookies-{'proxy' if proxied else 'direct'}.json"
+
     def _session(self, proxied: bool) -> requests.Session:
         if proxied not in self._sessions:
-            self._sessions[proxied] = requests.Session(
+            session = requests.Session(
                 impersonate="chrome", proxy=self.proxy if proxied else None,
                 headers={"Accept-Language": "en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7"})
+            load_cookies(session, self._cookie_file(proxied))
+            self._sessions[proxied] = session
         return self._sessions[proxied]
 
     def _get(self, url: str, **kw):
         if self.proxy and time.monotonic() >= self._proxy_down_until:
+            session = self._session(True)
             try:
-                resp = self._session(True).get(url, timeout=self.timeout, **kw)
+                resp = session.get(url, timeout=self.timeout, **kw)
                 self.last_route = "proxy"
-                return self._check(resp, url, proxied=True)
+                return self._check(resp, url, session, proxied=True)
             except requests.RequestsError as e:
                 log.warning("proxy unreachable (%s), going direct for %d s", e.__class__.__name__,
                             self.PROXY_RETRY_AFTER)
                 self._proxy_down_until = time.monotonic() + self.PROXY_RETRY_AFTER
-                self.reset(True)
+        session = self._session(False)
         try:
-            resp = self._session(False).get(url, timeout=self.timeout, **kw)
+            resp = session.get(url, timeout=self.timeout, **kw)
         except requests.RequestsError as e:
-            self.reset(False)
             raise BmsError(f"request failed: {e}") from e
         self.last_route = "direct"
-        return self._check(resp, url, proxied=False)
+        return self._check(resp, url, session, proxied=False)
 
-    def _check(self, resp, url: str, proxied: bool):
+    def _check(self, resp, url: str, session: requests.Session, proxied: bool):
+        save_cookies(session, self._cookie_file(proxied))
         if resp.status_code != 200:
-            self.reset(proxied)  # drop cookies that may be marked
-            raise BmsError(f"HTTP {resp.status_code} from {urlparse(url).path} ({'proxy' if proxied else 'direct'})")
+            route = "proxy" if proxied else "direct"
+            mitigated = resp.headers.get("cf-mitigated")
+            raise BmsError(f"HTTP {resp.status_code} from {urlparse(url).path} ({route}"
+                           f"{', cloudflare ' + mitigated if mitigated else ''})")
         return resp
 
-    def reset(self, proxied: bool | None = None) -> None:
-        for key in ([proxied] if proxied is not None else list(self._sessions)):
-            session = self._sessions.pop(key, None)
-            if session is not None:
-                session.close()
+    def close(self) -> None:
+        for session in self._sessions.values():
+            session.close()
+        self._sessions.clear()
 
     def movie_page(self, ref: MovieRef) -> MoviePage:
         return parse_movie_page(self._get(ref.page_url).text, ref.code)
@@ -321,3 +334,28 @@ class BmsClient:
         except ValueError as e:
             raise BmsError("showtimes response is not JSON (blocked?)") from e
         return parse_showtimes(payload, code)
+
+
+def save_cookies(session: requests.Session, path: Path | None) -> None:
+    if path is None:
+        return
+    cookies = [{"name": c.name, "value": c.value, "domain": c.domain, "path": c.path,
+                "expires": c.expires, "secure": c.secure} for c in session.cookies.jar]
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cookies))
+    tmp.replace(path)
+
+
+def load_cookies(session: requests.Session, path: Path | None) -> None:
+    if path is None or not path.exists():
+        return
+    try:
+        cookies = json.loads(path.read_text())
+    except ValueError:
+        return
+    now = time.time()
+    for c in cookies:
+        if c.get("expires") and c["expires"] < now:
+            continue
+        session.cookies.set(c["name"], c["value"], domain=c.get("domain") or "", path=c.get("path") or "/",
+                            secure=bool(c.get("secure")))

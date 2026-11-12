@@ -51,7 +51,8 @@ def main(argv: list[str] | None = None) -> int:
 
     watches = load_watches(settings.watches_file)
     names = ", ".join(html.escape(f"{w.name} ({w.movie.city.title()})") for w in watches if w.enabled)
-    monitor = Monitor(settings, BmsClient(proxy=settings.proxy), Store(settings.state_db), telegram.send)
+    client = BmsClient(proxy=settings.proxy, cookie_dir=settings.state_db.parent)
+    monitor = Monitor(settings, client, Store(settings.state_db), telegram.send)
     telegram.send(f"👀 BookMyShow monitor started. Watching: {names or 'nothing yet'}")
     monitor.run_forever()
     return 0
