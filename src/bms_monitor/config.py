@@ -76,6 +76,13 @@ def load_watches(path: Path) -> list[Watch]:
     return watches
 
 
+def _secret(env, name: str) -> str:
+    value = env.get(name, "")
+    if not value and env.get(f"{name}_FILE"):
+        value = Path(env[f"{name}_FILE"]).read_text().strip()
+    return value
+
+
 @dataclass
 class Settings:
     watches_file: Path
@@ -89,6 +96,11 @@ class Settings:
     telegram_thread_id: str | None
     open_interval: float = 120  # seconds between full scans once a watch's booking is open
     open_fast_for: float = 3600  # ...except for this long after opening, when it's every check
+    twilio_account_sid: str = ""
+    twilio_key_sid: str = ""
+    twilio_key_secret: str = ""
+    call_from: str = ""
+    call_to: str = ""  # empty: no phone calls
 
     @classmethod
     def from_env(cls, env=os.environ) -> "Settings":
@@ -108,4 +120,9 @@ class Settings:
             telegram_thread_id=env.get("TELEGRAM_THREAD_ID") or None,
             open_interval=float(env.get("BMS_OPEN_INTERVAL", "120")),
             open_fast_for=float(env.get("BMS_OPEN_FAST_FOR", "3600")),
+            twilio_account_sid=env.get("TWILIO_ACCOUNT_SID", ""),
+            twilio_key_sid=env.get("TWILIO_API_KEY_SID", ""),
+            twilio_key_secret=_secret(env, "TWILIO_API_KEY_SECRET"),
+            call_from=env.get("CALL_FROM", ""),
+            call_to=env.get("CALL_TO", ""),
         )

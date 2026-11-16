@@ -457,3 +457,80 @@ def test_page_not_ready_is_retried_once(monkeypatch):
     monkeypatch.setattr(b.time, "sleep", lambda s: None)
     page = client.movie_page(MovieRef("hyderabad", "talcum-powder", "ET00521922"))
     assert page.title == "Talcum Powder" and pages == []
+
+
+def test_one_call_per_movie_and_retries_capped(tmp_path):
+    from bms_monitor.config import Settings
+    wf = tmp_path / "watches.toml"
+    wf.write_text('[[watch]]\nname = "R"\nurl = "https://in.bookmyshow.com/hyderabad/movies/ramayana/ET00451914"\n'
+                  'languages = ["Telugu"]\nformats = ["2D"]\n')
+    settings = Settings(wf, tmp_path / "s.db", 60, 0, None, None, "t", "c", None)
+    calls, ok = [], [False]
+
+    def call(text):
+        calls.append(text)
+        return ok[0]
+
+    m = Monitor(settings, FakeClient("page-open.html", "showtimes-open.json"), Store(settings.state_db),
+                lambda msg: True, call=call)
+    m.pause = lambda: None
+    m.tick()
+    m.tick()
+    ok[0] = True
+    m.tick()
+    m.tick()
+    m.tick()
+    assert len(calls) == 3 and "Booking is open in Hyderabad" in calls[0]  # 2 failed tries, then 1 call
+
+    m2 = Monitor(settings, FakeClient("page-open.html", "showtimes-open.json"), Store(tmp_path / "t.db"),
+                 lambda msg: True, call=lambda t: calls.append(t) or False)
+    m2.pause = lambda: None
+    for _ in range(6):
+        m2.tick()
+    assert len(calls) == 6  # capped at 3 tries for the second store
+
+
+def test_caller_builds_a_twilio_request(monkeypatch):
+    import urllib.parse
+    from bms_monitor import calls as c
+    seen = {}
+
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"status": "queued"}'
+
+    def fake_urlopen(req, timeout):
+        seen["url"], seen["body"], seen["auth"] = req.full_url, req.data, req.headers["Authorization"]
+        return Resp()
+
+    monkeypatch.setattr(c.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(c.json, "load", lambda r: {"status": "queued"})
+    caller = c.Caller("AC123", "SK456", "secret", "+15550001111", "+919999999999")
+    assert caller.call("Dune & co <booking> open")
+    body = urllib.parse.parse_qs(seen["body"].decode())
+    assert seen["url"].endswith("/Accounts/AC123/Calls.json") and seen["auth"].startswith("Basic ")
+    assert body["To"] == ["+919999999999"] and "Dune &amp; co &lt;booking&gt; open" in body["Twiml"][0]
+
+
+def test_no_call_for_an_opening_that_is_old_news(tmp_path):
+    from bms_monitor.config import Settings
+    wf = tmp_path / "watches.toml"
+    wf.write_text('[[watch]]\nname = "R"\nurl = "https://in.bookmyshow.com/hyderabad/movies/ramayana/ET00451914"\n'
+                  'languages = ["Telugu"]\nformats = ["2D"]\n')
+    settings = Settings(wf, tmp_path / "s.db", 60, 0, None, None, "t", "c", None)
+    store = Store(settings.state_db)
+    store.mark_opened("hyderabad:ET00451914")
+    store.db.execute("update opened set at = at - 7200")  # opened 2 hours ago, before calls existed
+    store.db.commit()
+    calls = []
+    m = Monitor(settings, FakeClient("page-open.html", "showtimes-open.json"), store,
+                lambda msg: True, call=lambda t: calls.append(t) or True)
+    m.pause = lambda: None
+    m.tick()
+    assert calls == []

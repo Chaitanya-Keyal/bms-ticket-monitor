@@ -3,6 +3,7 @@
     python -m bms_monitor run              check every minute and send alerts
     python -m bms_monitor check            one pass, print what would be sent (sends nothing)
     python -m bms_monitor telegram-test    send a test message
+    python -m bms_monitor call-test        place a test phone call (needs the Twilio settings)
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import logging
 import sys
 
 from .bms import BmsClient, BmsError
+from .calls import Caller
 from .config import Settings, load_watches
 from .monitor import Monitor, check_watch, opened_message, shows_message
 from .store import Store
@@ -21,7 +23,7 @@ from .telegram import Telegram
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bms_monitor")
-    parser.add_argument("command", choices=["run", "check", "telegram-test"])
+    parser.add_argument("command", choices=["run", "check", "telegram-test", "call-test"])
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                         stream=sys.stdout)
@@ -45,6 +47,16 @@ def main(argv: list[str] | None = None) -> int:
             print()
         return 0
 
+    caller = None
+    if settings.call_to:
+        caller = Caller(settings.twilio_account_sid, settings.twilio_key_sid, settings.twilio_key_secret,
+                        settings.call_from, settings.call_to)
+    if args.command == "call-test":
+        if caller is None:
+            print("CALL_TO is not set")
+            return 1
+        return 0 if caller.call("This is a test call from your BookMyShow monitor. Calls work.") else 1
+
     telegram = Telegram(settings.telegram_token, settings.telegram_chat_id, settings.telegram_thread_id)
     if args.command == "telegram-test":
         return 0 if telegram.send("✅ BookMyShow monitor can reach you here.") else 1
@@ -52,7 +64,8 @@ def main(argv: list[str] | None = None) -> int:
     watches = load_watches(settings.watches_file)
     names = ", ".join(html.escape(f"{w.name} ({w.movie.city.title()})") for w in watches if w.enabled)
     client = BmsClient(proxy=settings.proxy, cookie_dir=settings.state_db.parent)
-    monitor = Monitor(settings, client, Store(settings.state_db), telegram.send)
+    monitor = Monitor(settings, client, Store(settings.state_db), telegram.send,
+                      call=caller.call if caller else None)
     telegram.send(f"👀 BookMyShow monitor started. Watching: {names or 'nothing yet'}")
     monitor.run_forever()
     return 0
