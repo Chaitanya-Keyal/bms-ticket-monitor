@@ -19,9 +19,12 @@ Every minute (randomised a little), for each watch:
      watch has shows there, listing those versions;
    - a message for every show matching your filters that you haven't been told
      about yet, grouped by day and cinema, with a booking link. Later cinemas,
-     dates and screens trigger new messages; nothing is sent twice. After the
-     "open" message, full scans run every 2 minutes (`BMS_OPEN_INTERVAL`) since
-     they cost the most requests.
+     dates and screens trigger new messages; nothing is sent twice. Full scans
+     run every minute for the first hour after opening, then every 2 minutes
+     (`BMS_OPEN_FAST_FOR`, `BMS_OPEN_INTERVAL`) since they cost the most requests.
+   - a one-time **heads-up** when BookMyShow switches a movie on in the city
+     before listing any shows (it did this about 2 minutes ahead of the shows for
+     one big release).
 4. If checks keep failing (blocked, site changed, network down), checks back off
    (2, 4, then 5 minutes apart) instead of retrying at full speed, and you get a
    **"checks are failing"** alert after 3 in a row (about 7 minutes), and a "working again"

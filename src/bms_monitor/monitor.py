@@ -26,6 +26,7 @@ class Result:
     watch: Watch
     page: MoviePage
     open: bool = False  # a version this watch covers has shows in the city
+    activated: bool = False  # BMS switched it on in the city, possibly before listing shows
     open_versions: list[Variant] = field(default_factory=list)
     matches: list[tuple[Variant, Show]] = field(default_factory=list)
 
@@ -49,6 +50,7 @@ def check_watch(client: BmsClient, watch: Watch, pause: Callable[[], None] = lam
     if not page.open:
         pause()
         own = client.showtimes(page.region, watch.movie.code, referer=referer)
+        result.activated = own.activated
         if not own.open:
             return result
         variants = [_variant_from_label(watch.movie.code, own.label)]
@@ -60,6 +62,7 @@ def check_watch(client: BmsClient, watch: Watch, pause: Callable[[], None] = lam
         else:
             pause()
             first = client.showtimes(page.region, variant.code, referer=referer)
+        result.activated = result.activated or first.activated
         if not first.open:
             continue  # listed version without shows in this city yet
         result.open = True
@@ -93,6 +96,13 @@ def _day(date_code: str) -> str:
 def _icon(show: Show) -> str:
     statuses = [c.status for c in show.categories] or [show.status]
     return STATUS_ICON.get(max(statuses), "")
+
+
+def activated_message(r: Result) -> str:
+    e = html.escape
+    return (f"⏳ <b>{e(r.page.title)}</b>: BookMyShow just switched it on in {e(r.watch.movie.city.title())}, "
+            f"but no shows are listed yet. Booking looks about to open; checking every minute.\n"
+            f'<a href="{e(r.watch.movie.page_url)}">Open on BookMyShow</a>')
 
 
 def opened_message(r: Result) -> str:
@@ -135,13 +145,14 @@ class Monitor:
         self._open: dict[str, bool] = {}
 
     def due(self, watch: Watch) -> bool:
-        """Every tick until booking opens; after the "open" alert, at most every open_interval.
-        The opening is the time-critical part; later scans of every version and date cost the
-        most requests, so they run less often."""
+        """Every tick until booking opens and for open_fast_for seconds after (when cinemas and the
+        best seats appear), then at most every open_interval, since full scans of every version
+        and date cost the most requests."""
         last = self._last_scan.get(watch.key)
-        if last is not None and self.store.was_opened(watch.key):
-            return time.monotonic() - last >= self.settings.open_interval * 0.9
-        return True
+        opened_at = self.store.opened_at(watch.key)
+        if last is None or opened_at is None or time.time() - opened_at < self.settings.open_fast_for:
+            return True
+        return time.monotonic() - last >= self.settings.open_interval * 0.9
 
     def pause(self) -> None:
         time.sleep(random.uniform(1.0, 3.0))
@@ -192,7 +203,8 @@ class Monitor:
                 errors.append(f"{watch.name}: {e}")
                 continue
             log.info("%s: %s, %d matching show(s)", watch.name,
-                     "open" if r.open else "not open", len(r.matches))
+                     "open" if r.open else ("activated, no shows yet" if r.activated else "not open"),
+                     len(r.matches))
             self._open[watch.name] = r.open
             self.deliver(r)
             results.append(r)
@@ -205,6 +217,10 @@ class Monitor:
 
     def deliver(self, r: Result) -> None:
         key = r.watch.key
+        if (r.activated and not r.open and not self.store.was_opened(key)
+                and not self.store.get(f"activated:{key}")):
+            if self.send(activated_message(r)):
+                self.store.put(f"activated:{key}", str(int(time.time())))
         if r.open and not self.store.was_opened(key):
             if self.send(opened_message(r)):
                 self.store.mark_opened(key)

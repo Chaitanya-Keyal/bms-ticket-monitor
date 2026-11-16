@@ -37,6 +37,10 @@ class BmsError(Exception):
     """A request failed or returned something we don't recognise."""
 
 
+class PageNotReady(BmsError):
+    """The movie page came back without its movie details loaded (a rare BMS hiccup)."""
+
+
 class Blocked(BmsError):
     """BookMyShow (Cloudflare) refused the request: 403, 429 or 503."""
 
@@ -99,11 +103,12 @@ class Show:
 @dataclass
 class Showtimes:
     event_code: str
-    open: bool
+    open: bool  # bookable dates or shows are listed
     date_code: str = ""
     dates: list[str] = field(default_factory=list)
     label: str = ""
     shows: list[Show] = field(default_factory=list)
+    activated: bool = False  # BMS no longer says "no shows in this region", even if nothing is listed
 
 
 @dataclass(frozen=True)
@@ -167,7 +172,7 @@ def parse_movie_page(html: str, code: str) -> MoviePage:
     query = queries[key]
     data = query.get("data")
     if query.get("status") != "fulfilled" or not isinstance(data, dict):
-        raise BmsError(f"movie details not loaded (status {query.get('status')})")
+        raise PageNotReady(f"movie details not loaded (status {query.get('status')})")
 
     region = re.search(r"-rgn-([A-Z0-9]+)-", key)
     banner = data.get("bannerWidget") or {}
@@ -256,8 +261,10 @@ def parse_showtimes(payload: dict, code: str) -> Showtimes:
                     ))
 
     date_code = str((data.get("additionalData") or {}).get("dateCode", ""))
-    return Showtimes(event_code=code, open=True, date_code=date_code, dates=dates,
-                     label=label, shows=shows)
+    # When a movie goes live, BMS first returns this layout with no dates and no shows,
+    # about a couple of minutes before the shows appear: activated, but not open yet.
+    return Showtimes(event_code=code, open=bool(dates or shows), date_code=date_code, dates=dates,
+                     label=label, shows=shows, activated=True)
 
 
 class BmsClient:
@@ -350,7 +357,11 @@ class BmsClient:
         self._sessions.clear()
 
     def movie_page(self, ref: MovieRef) -> MoviePage:
-        return parse_movie_page(self._get(ref.page_url).text, ref.code)
+        try:
+            return parse_movie_page(self._get(ref.page_url).text, ref.code)
+        except PageNotReady:
+            time.sleep(3)  # one quick retry instead of losing a whole check
+            return parse_movie_page(self._get(ref.page_url).text, ref.code)
 
     def showtimes(self, region: str, code: str, date_code: str = "", referer: str = "") -> Showtimes:
         params = {"eventCode": code, "dateCode": date_code, "isDesktop": "true",

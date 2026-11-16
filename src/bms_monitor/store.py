@@ -57,6 +57,10 @@ class Store:
     def was_opened(self, watch: str) -> bool:
         return self.db.execute("select 1 from opened where watch = ?", [watch]).fetchone() is not None
 
+    def opened_at(self, watch: str) -> int | None:
+        row = self.db.execute("select at from opened where watch = ?", [watch]).fetchone()
+        return row[0] if row else None
+
     def mark_opened(self, watch: str) -> None:
         self.db.execute("insert or ignore into opened values (?, ?)", [watch, int(time.time())])
         self.db.commit()

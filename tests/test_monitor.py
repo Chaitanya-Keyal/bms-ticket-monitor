@@ -389,3 +389,71 @@ def test_status_file_for_outside_health_checks(tmp_path):
     st2 = json.loads((tmp_path / "status.json").read_text())
     assert st2["failures"] == 5 and "challenge" in st2["last_error"] and st2["last_good"] == st["last_good"]
     assert sent == []  # fail_alert_after = 0: the outside check owns the alert
+
+
+def _activated_payload():
+    """What BMS returned for the base code at the moment a movie went live: no dates, no shows."""
+    import copy
+    p = copy.deepcopy(load("showtimes-open.json"))
+    for w in p["data"]["topStickyWidgets"]:
+        if w.get("type") == "horizontal-block-list":
+            w["data"] = []
+    for w in p["data"]["showtimeWidgets"]:
+        if w.get("type") == "groupList":
+            w["data"] = []
+    return p
+
+
+def test_empty_live_response_is_activated_not_open():
+    st = parse_showtimes(_activated_payload(), "ET00439706")
+    assert st.activated and not st.open and st.label == "Telugu • 2D"
+    st = parse_showtimes(load("showtimes-notopen.json"), "ET00439706")
+    assert not st.activated and not st.open
+
+
+def test_heads_up_then_open_and_fast_scans_after_opening(tmp_path):
+    from bms_monitor.config import Settings
+    wf = tmp_path / "watches.toml"
+    wf.write_text('[[watch]]\nname = "T"\nurl = "https://in.bookmyshow.com/hyderabad/movies/talcum-powder/ET00521922"\n')
+    settings = Settings(wf, tmp_path / "s.db", 60, 0, None, None, "t", "c", None)
+
+    class Client(FakeClient):
+        payload = None
+
+        def showtimes(self, region, code, date_code="", referer=""):
+            self.calls.append(("showtimes", code, date_code))
+            return parse_showtimes(self.payload, code)
+
+    client = Client("page-notopen.html", "")
+    client.payload = _activated_payload()
+    sent = []
+    m = Monitor(settings, client, Store(settings.state_db), lambda msg: sent.append(msg) or True)
+    m.pause = lambda: None
+    m.tick()
+    m.tick()
+    assert len(sent) == 1 and "switched it on" in sent[0]  # once, and no "open" yet
+    client.payload = load("showtimes-open.json")
+    m.tick()
+    assert "booking is open" in sent[1] and "new show" in sent[2]
+    calls = len(client.calls)
+    m.tick()  # within the first hour after opening: still scanned every check
+    assert len(client.calls) > calls
+
+
+def test_page_not_ready_is_retried_once(monkeypatch):
+    from bms_monitor.bms import BmsClient
+
+    class Resp:
+        status_code = 200
+        headers = {}
+
+    pages = [
+        '<script>window.__INITIAL_STATE__ = {"synopsisMoviesApi": {"queries": {"fetchSynopsisInitDynamic-x-ET00521922-rgn-HYD-": {"status": "uninitialized"}}}}</script>',
+        load("page-notopen.html"),
+    ]
+    client = BmsClient()
+    monkeypatch.setattr(client, "_get", lambda url: type("R", (), {"text": pages.pop(0)})())
+    import bms_monitor.bms as b
+    monkeypatch.setattr(b.time, "sleep", lambda s: None)
+    page = client.movie_page(MovieRef("hyderabad", "talcum-powder", "ET00521922"))
+    assert page.title == "Talcum Powder" and pages == []
