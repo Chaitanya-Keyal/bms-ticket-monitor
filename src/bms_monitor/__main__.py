@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
         if caller is None:
             print("CALL_TO is not set")
             return 1
-        return 0 if caller.call("This is a test call from your BookMyShow monitor. Calls work.") else 1
+        return 0 if caller.call() else 1
 
     telegram = Telegram(settings.telegram_token, settings.telegram_chat_id, settings.telegram_thread_id)
     if args.command == "telegram-test":

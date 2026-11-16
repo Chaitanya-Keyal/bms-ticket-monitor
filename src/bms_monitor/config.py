@@ -100,7 +100,8 @@ class Settings:
     twilio_key_sid: str = ""
     twilio_key_secret: str = ""
     call_from: str = ""
-    call_to: str = ""  # empty: no phone calls
+    call_to: list[str] = field(default_factory=list)  # empty: no phone calls
+    call_min_gap: float = 300  # seconds between calls about the same movie
 
     @classmethod
     def from_env(cls, env=os.environ) -> "Settings":
@@ -124,5 +125,6 @@ class Settings:
             twilio_key_sid=env.get("TWILIO_API_KEY_SID", ""),
             twilio_key_secret=_secret(env, "TWILIO_API_KEY_SECRET"),
             call_from=env.get("CALL_FROM", ""),
-            call_to=env.get("CALL_TO", ""),
+            call_to=[n.replace(" ", "") for n in env.get("CALL_TO", "").split(",") if n.strip()],
+            call_min_gap=float(env.get("CALL_MIN_GAP", "300")),
         )

@@ -219,7 +219,6 @@ class Monitor:
 
     def deliver(self, r: Result) -> None:
         key = r.watch.key
-        city = r.watch.movie.city.title()
         if (r.activated and not r.open and not self.store.was_opened(key)
                 and not self.store.get(f"activated:{key}")):
             if self.send(activated_message(r)):
@@ -227,31 +226,42 @@ class Monitor:
         if r.open and not self.store.was_opened(key):
             if self.send(opened_message(r)):
                 self.store.mark_opened(key)
-        if r.open or r.activated:
-            self.ring(key, f"{r.page.title}. " + (f"Booking is open in {city}. Check Telegram." if r.open else
-                      f"BookMyShow just switched it on in {city}. Booking is about to open."))
+        attempted = (r.open or r.activated) and self.ring(key, opening=True)
         if not r.matches:
             return
         done = self.store.notified(key, [s.key for _, s in r.matches])
         new = [(v, s) for v, s in r.matches if s.key not in done]
         if new and self.send(shows_message(r, new)):
             self.store.mark_notified(key, [s.key for _, s in new])
+            if not attempted:  # at most one call attempt per movie per check
+                self.ring(key, opening=False)
 
-    CALL_WINDOW = 1800  # only call within 30 min of the heads-up/opening; later it's old news
+    CALL_WINDOW = 1800  # opening calls only within 30 min of it; later it's old news
 
-    def ring(self, key: str, text: str) -> None:
-        """One phone call per movie, at its first heads-up or opening; up to 3 tries if Twilio fails."""
-        if self.call is None or self.store.get(f"called:{key}"):
-            return
-        seen = [int(t) for t in (self.store.opened_at(key), self.store.get(f"activated:{key}")) if t]
-        if not seen or time.time() - min(seen) > self.CALL_WINDOW:
-            return
-        tries = int(self.store.get(f"call-tries:{key}") or 0)
-        if tries >= 3:
-            return
-        self.store.put(f"call-tries:{key}", str(tries + 1))
-        if self.call(text):
-            self.store.put(f"called:{key}", str(int(time.time())))
+    def ring(self, key: str, opening: bool) -> bool:
+        """Ring the phone: once at a movie's first heads-up or opening (up to 3 tries if Twilio
+        fails), and after every new-shows alert. Never twice about one movie within call_min_gap.
+        Returns True if a call was attempted."""
+        if self.call is None:
+            return False
+        now = time.time()
+        if now - float(self.store.get(f"last-call:{key}") or 0) < self.settings.call_min_gap:
+            return False
+        if opening:
+            if self.store.get(f"called:{key}"):
+                return False
+            seen = [int(t) for t in (self.store.opened_at(key), self.store.get(f"activated:{key}")) if t]
+            if not seen or now - min(seen) > self.CALL_WINDOW:
+                return False
+            tries = int(self.store.get(f"call-tries:{key}") or 0)
+            if tries >= 3:
+                return False
+            self.store.put(f"call-tries:{key}", str(tries + 1))
+        if self.call(""):
+            self.store.put(f"last-call:{key}", str(int(now)))
+            if opening:
+                self.store.put(f"called:{key}", str(int(now)))
+        return True
 
     def _failed(self, error: str) -> None:
         """fail_alert_after <= 0 turns the failure alert off (an outside health check owns it)."""

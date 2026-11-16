@@ -22,8 +22,9 @@ Every minute (randomised a little), for each watch:
      dates and screens trigger new messages; nothing is sent twice. Full scans
      run every minute for the first hour after opening, then every 2 minutes
      (`BMS_OPEN_FAST_FOR`, `BMS_OPEN_INTERVAL`) since they cost the most requests.
-   - optionally a **phone call** (Twilio) at a movie's first heads-up or opening,
-     once per movie and only within 30 minutes of it;
+   - optionally a **phone call** (Twilio) to one or more numbers: it just rings,
+     at a movie's first heads-up or opening and after every new-shows alert, at
+     most once per movie every 5 minutes (`CALL_MIN_GAP`);
    - a one-time **heads-up** when BookMyShow switches a movie on in the city
      before listing any shows (it did this about 2 minutes ahead of the shows for
      one big release).

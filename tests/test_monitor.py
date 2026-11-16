@@ -459,35 +459,53 @@ def test_page_not_ready_is_retried_once(monkeypatch):
     assert page.title == "Talcum Powder" and pages == []
 
 
-def test_one_call_per_movie_and_retries_capped(tmp_path):
+def _call_settings(tmp_path, gap=300):
     from bms_monitor.config import Settings
     wf = tmp_path / "watches.toml"
     wf.write_text('[[watch]]\nname = "R"\nurl = "https://in.bookmyshow.com/hyderabad/movies/ramayana/ET00451914"\n'
                   'languages = ["Telugu"]\nformats = ["2D"]\n')
-    settings = Settings(wf, tmp_path / "s.db", 60, 0, None, None, "t", "c", None)
+    return Settings(wf, tmp_path / "s.db", 60, 0, None, None, "t", "c", None, call_min_gap=gap)
+
+
+def test_opening_call_retries_up_to_3_times(tmp_path):
     calls, ok = [], [False]
-
-    def call(text):
-        calls.append(text)
-        return ok[0]
-
-    m = Monitor(settings, FakeClient("page-open.html", "showtimes-open.json"), Store(settings.state_db),
-                lambda msg: True, call=call)
+    m = Monitor(_call_settings(tmp_path), FakeClient("page-open.html", "showtimes-open.json"),
+                Store(tmp_path / "s.db"), lambda msg: True, call=lambda t: calls.append(t) or ok[0])
     m.pause = lambda: None
-    m.tick()
-    m.tick()
+    for _ in range(5):
+        m.tick()
+    assert len(calls) == 3  # opening + shows in one tick share a call; 3 failed tries, then stop
     ok[0] = True
     m.tick()
-    m.tick()
-    m.tick()
-    assert len(calls) == 3 and "Booking is open in Hyderabad" in calls[0]  # 2 failed tries, then 1 call
+    assert len(calls) == 3
 
-    m2 = Monitor(settings, FakeClient("page-open.html", "showtimes-open.json"), Store(tmp_path / "t.db"),
-                 lambda msg: True, call=lambda t: calls.append(t) or False)
-    m2.pause = lambda: None
-    for _ in range(6):
-        m2.tick()
-    assert len(calls) == 6  # capped at 3 tries for the second store
+
+def test_new_shows_ring_again_after_the_gap(tmp_path):
+    import json
+    calls = []
+    client = FakeClient("page-open.html", "showtimes-open.json")
+    store = Store(tmp_path / "s.db")
+    m = Monitor(_call_settings(tmp_path, gap=300), client, store, lambda msg: True,
+                call=lambda t: calls.append(t) or True)
+    m.pause = lambda: None
+    m.tick()
+    assert len(calls) == 1  # opening and its shows: one call
+
+    def add_show(session):
+        p = load("showtimes-open.json")
+        card = p["data"]["showtimeWidgets"][1]["data"][0]["data"][0]
+        st = json.loads(json.dumps(card["showtimes"][0]))
+        st["additionalData"]["sessionId"] = session
+        card["showtimes"].append(st)
+        return p
+
+    client.showtimes = lambda region, code, date_code="", referer="": parse_showtimes(add_show("9001"), code)
+    m.tick()
+    assert len(calls) == 1  # new show within 5 min: Telegram only
+    store.put("last-call:hyderabad:ET00451914", "0")  # 5 minutes later
+    client.showtimes = lambda region, code, date_code="", referer="": parse_showtimes(add_show("9002"), code)
+    m.tick()
+    assert len(calls) == 2 and calls[-1] == ""
 
 
 def test_caller_builds_a_twilio_request(monkeypatch):
@@ -511,11 +529,13 @@ def test_caller_builds_a_twilio_request(monkeypatch):
 
     monkeypatch.setattr(c.urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(c.json, "load", lambda r: {"status": "queued"})
-    caller = c.Caller("AC123", "SK456", "secret", "+15550001111", "+919999999999")
+    caller = c.Caller("AC123", "SK456", "secret", "+15550001111", ["+919999999999"])
     assert caller.call("Dune & co <booking> open")
     body = urllib.parse.parse_qs(seen["body"].decode())
     assert seen["url"].endswith("/Accounts/AC123/Calls.json") and seen["auth"].startswith("Basic ")
     assert body["To"] == ["+919999999999"] and "Dune &amp; co &lt;booking&gt; open" in body["Twiml"][0]
+    assert caller.call()
+    assert "<Hangup/>" in urllib.parse.parse_qs(seen["body"].decode())["Twiml"][0]
 
 
 def test_no_call_for_an_opening_that_is_old_news(tmp_path):
@@ -526,6 +546,7 @@ def test_no_call_for_an_opening_that_is_old_news(tmp_path):
     settings = Settings(wf, tmp_path / "s.db", 60, 0, None, None, "t", "c", None)
     store = Store(settings.state_db)
     store.mark_opened("hyderabad:ET00451914")
+    store.mark_notified("hyderabad:ET00451914", [s.key for s in parse_showtimes(load("showtimes-open.json"), "ET00518312").shows])
     store.db.execute("update opened set at = at - 7200")  # opened 2 hours ago, before calls existed
     store.db.commit()
     calls = []
