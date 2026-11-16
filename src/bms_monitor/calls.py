@@ -14,27 +14,33 @@ log = logging.getLogger(__name__)
 
 
 class Caller:
-    def __init__(self, account_sid: str, key_sid: str, key_secret: str, from_number: str, to_numbers: list[str]):
+    def __init__(self, account_sid: str, key_sid: str, key_secret: str, from_number: str, to_numbers: list[str],
+                 twiml_url: str = ""):
         if not all((account_sid, key_sid, key_secret, from_number)) or not to_numbers:
             raise ValueError("Twilio account SID, API key, caller and callee numbers are all required")
         self.url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Calls.json"
         self.auth = "Basic " + base64.b64encode(f"{key_sid}:{key_secret}".encode()).decode()
         self.from_number = from_number
         self.to_numbers = to_numbers
+        # Trial accounts may only point calls at Twilio's own template URLs (no inline TwiML,
+        # no Timeout), e.g. https://webhooks.twilio.com/v1/Voice/Template/voice_speech_recognition
+        self.twiml_url = twiml_url
 
     def call(self, text: str = "") -> bool:
         """Ring every number. With text, read it twice; without, just ring and hang up when
-        answered (the details are in Telegram). True if Twilio accepted at least one call."""
+        answered (the details are in Telegram). With twiml_url set, that URL decides what the call
+        plays instead. True if Twilio accepted at least one call."""
+        if self.twiml_url:
+            return any([self._call_one(to, {"Url": self.twiml_url}) for to in self.to_numbers])
         if text:
             say = f'<Say language="en-IN">{escape(text)}</Say>'
             twiml = f'<Response><Pause length="1"/>{say}<Pause length="1"/>{say}</Response>'
         else:
             twiml = '<Response><Pause length="1"/><Hangup/></Response>'
-        return any([self._call_one(to, twiml) for to in self.to_numbers])
+        return any([self._call_one(to, {"Twiml": twiml, "Timeout": "45"}) for to in self.to_numbers])
 
-    def _call_one(self, to: str, twiml: str) -> bool:
-        body = urllib.parse.urlencode({"To": to, "From": self.from_number,
-                                       "Twiml": twiml, "Timeout": "45"}).encode()
+    def _call_one(self, to: str, params: dict) -> bool:
+        body = urllib.parse.urlencode({"To": to, "From": self.from_number, **params}).encode()
         req = urllib.request.Request(self.url, data=body, headers={"Authorization": self.auth})
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:

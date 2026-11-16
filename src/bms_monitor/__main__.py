@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     caller = None
     if settings.call_to:
         caller = Caller(settings.twilio_account_sid, settings.twilio_key_sid, settings.twilio_key_secret,
-                        settings.call_from, settings.call_to)
+                        settings.call_from, settings.call_to, settings.call_twiml_url)
     if args.command == "call-test":
         if caller is None:
             print("CALL_TO is not set")

@@ -536,6 +536,12 @@ def test_caller_builds_a_twilio_request(monkeypatch):
     assert body["To"] == ["+919999999999"] and "Dune &amp; co &lt;booking&gt; open" in body["Twiml"][0]
     assert caller.call()
     assert "<Hangup/>" in urllib.parse.parse_qs(seen["body"].decode())["Twiml"][0]
+    trial = c.Caller("AC123", "SK456", "secret", "+15550001111", ["+919999999999", "+918888888888"],
+                     twiml_url="https://webhooks.twilio.com/v1/Voice/Template/x")
+    assert trial.call()
+    body = urllib.parse.parse_qs(seen["body"].decode())
+    assert body["Url"] == ["https://webhooks.twilio.com/v1/Voice/Template/x"] and "Twiml" not in body
+    assert "Timeout" not in body and body["To"] == ["+918888888888"]
 
 
 def test_no_call_for_an_opening_that_is_old_news(tmp_path):

@@ -102,6 +102,7 @@ class Settings:
     call_from: str = ""
     call_to: list[str] = field(default_factory=list)  # empty: no phone calls
     call_min_gap: float = 300  # seconds between calls about the same movie
+    call_twiml_url: str = ""  # what calls play; trial accounts must use a Twilio template URL
 
     @classmethod
     def from_env(cls, env=os.environ) -> "Settings":
@@ -127,4 +128,5 @@ class Settings:
             call_from=env.get("CALL_FROM", ""),
             call_to=[n.replace(" ", "") for n in env.get("CALL_TO", "").split(",") if n.strip()],
             call_min_gap=float(env.get("CALL_MIN_GAP", "300")),
+            call_twiml_url=env.get("CALL_TWIML_URL", ""),
         )
