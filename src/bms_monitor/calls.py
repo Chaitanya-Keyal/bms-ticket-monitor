@@ -8,6 +8,7 @@ import logging
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from xml.sax.saxutils import escape
 
 log = logging.getLogger(__name__)
@@ -31,13 +32,17 @@ class Caller:
         answered (the details are in Telegram). With twiml_url set, that URL decides what the call
         plays instead. True if Twilio accepted at least one call."""
         if self.twiml_url:
-            return any([self._call_one(to, {"Url": self.twiml_url}) for to in self.to_numbers])
-        if text:
-            say = f'<Say language="en-IN">{escape(text)}</Say>'
-            twiml = f'<Response><Pause length="1"/>{say}<Pause length="1"/>{say}</Response>'
+            params = {"Url": self.twiml_url}
         else:
-            twiml = '<Response><Pause length="1"/><Hangup/></Response>'
-        return any([self._call_one(to, {"Twiml": twiml, "Timeout": "45"}) for to in self.to_numbers])
+            if text:
+                say = f'<Say language="en-IN">{escape(text)}</Say>'
+                twiml = f'<Response><Pause length="1"/>{say}<Pause length="1"/>{say}</Response>'
+            else:
+                twiml = '<Response><Pause length="1"/><Hangup/></Response>'
+            params = {"Twiml": twiml, "Timeout": "45"}
+        # All numbers at once, so every phone rings at the same time.
+        with ThreadPoolExecutor(max_workers=len(self.to_numbers)) as pool:
+            return any(list(pool.map(lambda to: self._call_one(to, params), self.to_numbers)))
 
     def _call_one(self, to: str, params: dict) -> bool:
         body = urllib.parse.urlencode({"To": to, "From": self.from_number, **params}).encode()

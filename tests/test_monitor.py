@@ -541,7 +541,7 @@ def test_caller_builds_a_twilio_request(monkeypatch):
     assert trial.call()
     body = urllib.parse.parse_qs(seen["body"].decode())
     assert body["Url"] == ["https://webhooks.twilio.com/v1/Voice/Template/x"] and "Twiml" not in body
-    assert "Timeout" not in body and body["To"] == ["+918888888888"]
+    assert "Timeout" not in body and body["To"][0] in ("+919999999999", "+918888888888")
 
 
 def test_no_call_for_an_opening_that_is_old_news(tmp_path):
