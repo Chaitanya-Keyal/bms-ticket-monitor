@@ -529,14 +529,14 @@ def test_caller_builds_a_twilio_request(monkeypatch):
 
     monkeypatch.setattr(c.urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(c.json, "load", lambda r: {"status": "queued"})
-    caller = c.Caller("AC123", "SK456", "secret", "+15550001111", ["+919999999999"])
+    caller = c.Caller("AC123", "SK456", "secret", "+15550001111", [("Me", "+919999999999")])
     assert caller.call("Dune & co <booking> open")
     body = urllib.parse.parse_qs(seen["body"].decode())
     assert seen["url"].endswith("/Accounts/AC123/Calls.json") and seen["auth"].startswith("Basic ")
     assert body["To"] == ["+919999999999"] and "Dune &amp; co &lt;booking&gt; open" in body["Twiml"][0]
     assert caller.call()
     assert "<Hangup/>" in urllib.parse.parse_qs(seen["body"].decode())["Twiml"][0]
-    trial = c.Caller("AC123", "SK456", "secret", "+15550001111", ["+919999999999", "+918888888888"],
+    trial = c.Caller("AC123", "SK456", "secret", "+15550001111", [("A", "+919999999999"), ("B", "+918888888888")],
                      twiml_url="https://webhooks.twilio.com/v1/Voice/Template/x")
     assert trial.call()
     body = urllib.parse.parse_qs(seen["body"].decode())
@@ -561,3 +561,9 @@ def test_no_call_for_an_opening_that_is_old_news(tmp_path):
     m.pause = lambda: None
     m.tick()
     assert calls == []
+
+
+def test_call_numbers_with_labels():
+    from bms_monitor.config import _numbers
+    assert _numbers("Asha=+91 98000 00000, +919811111111,") == [("Asha", "+919800000000"), ("...1111", "+919811111111")]
+    assert _numbers("") == []

@@ -76,6 +76,17 @@ def load_watches(path: Path) -> list[Watch]:
     return watches
 
 
+def _numbers(value: str) -> list[tuple[str, str]]:
+    """'Asha=+919800000000, +919811111111' -> [('Asha', '+919800000000'), ('...1111', '+919811111111')]"""
+    out = []
+    for entry in value.split(","):
+        label, _, number = entry.strip().rpartition("=")
+        number = number.replace(" ", "")
+        if number:
+            out.append((label.strip() or f"...{number[-4:]}", number))
+    return out
+
+
 def _secret(env, name: str) -> str:
     value = env.get(name, "")
     if not value and env.get(f"{name}_FILE"):
@@ -100,7 +111,7 @@ class Settings:
     twilio_key_sid: str = ""
     twilio_key_secret: str = ""
     call_from: str = ""
-    call_to: list[str] = field(default_factory=list)  # empty: no phone calls
+    call_to: list[tuple[str, str]] = field(default_factory=list)  # (label, number); empty: no calls
     call_min_gap: float = 300  # seconds between calls about the same movie
     call_twiml_url: str = ""  # what calls play; trial accounts must use a Twilio template URL
 
@@ -126,7 +137,7 @@ class Settings:
             twilio_key_sid=env.get("TWILIO_API_KEY_SID", ""),
             twilio_key_secret=_secret(env, "TWILIO_API_KEY_SECRET"),
             call_from=env.get("CALL_FROM", ""),
-            call_to=[n.replace(" ", "") for n in env.get("CALL_TO", "").split(",") if n.strip()],
+            call_to=_numbers(env.get("CALL_TO", "")),
             call_min_gap=float(env.get("CALL_MIN_GAP", "300")),
             call_twiml_url=env.get("CALL_TWIML_URL", ""),
         )

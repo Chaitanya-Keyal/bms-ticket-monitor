@@ -15,8 +15,8 @@ log = logging.getLogger(__name__)
 
 
 class Caller:
-    def __init__(self, account_sid: str, key_sid: str, key_secret: str, from_number: str, to_numbers: list[str],
-                 twiml_url: str = ""):
+    def __init__(self, account_sid: str, key_sid: str, key_secret: str, from_number: str,
+                 to_numbers: list[tuple[str, str]], twiml_url: str = ""):
         if not all((account_sid, key_sid, key_secret, from_number)) or not to_numbers:
             raise ValueError("Twilio account SID, API key, caller and callee numbers are all required")
         self.url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Calls.json"
@@ -42,17 +42,17 @@ class Caller:
             params = {"Twiml": twiml, "Timeout": "45"}
         # All numbers at once, so every phone rings at the same time.
         with ThreadPoolExecutor(max_workers=len(self.to_numbers)) as pool:
-            return any(list(pool.map(lambda to: self._call_one(to, params), self.to_numbers)))
+            return any(list(pool.map(lambda t: self._call_one(*t, params), self.to_numbers)))
 
-    def _call_one(self, to: str, params: dict) -> bool:
+    def _call_one(self, label: str, to: str, params: dict) -> bool:
         body = urllib.parse.urlencode({"To": to, "From": self.from_number, **params}).encode()
         req = urllib.request.Request(self.url, data=body, headers={"Authorization": self.auth})
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:
-                log.info("call to ...%s placed: %s", to[-4:], json.load(resp).get("status"))
+                log.info("call to %s: placed (%s)", label, json.load(resp).get("status"))
                 return True
         except urllib.error.HTTPError as e:
-            log.error("twilio rejected the call to ...%s: %s %s", to[-4:], e.code, e.read()[:300])
+            log.error("call to %s: rejected by twilio: %s %s", label, e.code, e.read()[:300])
         except Exception as e:
-            log.error("twilio call failed: %s", e.__class__.__name__)
+            log.error("call to %s: failed (%s)", label, e.__class__.__name__)
         return False
