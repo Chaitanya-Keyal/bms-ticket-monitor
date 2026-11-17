@@ -9,7 +9,7 @@
 # after, before  e.g. "18:00", "23:59"            (show start time, 24-hour)
 # enabled    false to pause a watch
 # reopen_cinemas     e.g. ["AMB Cinemas: Gachibowli"]  seat-release alerts at these cinemas: a seat
-#                    category's availability improves (sold out -> seats, almost full -> available...)
+#                    category comes back from sold out, or reaches available from almost full/filling fast
 # reopen_categories  e.g. ["PLATINUM", "RECLINER"]     only these categories (omit for all)
 # Calls (labels from CALL_TO):
 # call               who is rung for this movie's alerts; omit = everyone, [] = nobody

@@ -28,9 +28,9 @@ Every minute (randomised a little), for each watch:
      at a movie's first heads-up or opening and after every new-shows alert, at
      most once per movie every 5 minutes (`CALL_MIN_GAP`);
    - optional **seat-release alerts** at chosen cinemas (`reopen_cinemas`): when a
-     seat category's availability improves (sold out → seats, almost full →
-     available...), e.g. held seats released or cancellations; at most every 10
-     minutes per category. Categories only, not individual seats;
+     seat category comes back from sold out, or reaches "available" from almost
+     full / filling fast, e.g. held seats released or cancellations; at most every
+     10 minutes per category. Categories only, not individual seats;
    - a one-time **heads-up** when BookMyShow switches a movie on in the city
      before listing any shows (it did this about 2 minutes ahead of the shows for
      one big release).

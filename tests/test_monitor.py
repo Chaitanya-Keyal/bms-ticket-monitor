@@ -649,7 +649,7 @@ def test_almost_full_to_available_alerts_too(tmp_path):
     set_status(client, "6943", "GOLD", "3")
     m.tick()
     reopen = [s for s in sent if s.startswith("🔓")]
-    assert len(reopen) == 1 and "GOLD ₹295: almost full 🟡 → available 🟢" in reopen[0]
+    assert len(reopen) == 1 and "GOLD ₹295: almost full 🟠 → available 🟢" in reopen[0]
     set_status(client, "6943", "GOLD", "2")
     m.tick()  # getting worse never alerts
     assert len([s for s in sent if s.startswith("🔓")]) == 1
@@ -712,3 +712,15 @@ def test_priority_cinema_rings_everyone_listed_and_skips_the_gap(tmp_path):
     add_venue(client, "PRX9", "Prasad's Large Screen", "r")
     m.tick()
     assert len(rings) == 2
+
+
+def test_almost_full_to_filling_fast_is_not_alerted(tmp_path):
+    m, client, set_status, sent, calls = _reopen_setup(tmp_path)
+    m.tick()  # GOLD starts almost full
+    set_status(client, "6943", "GOLD", "2")
+    m.tick()
+    assert not [s for s in sent if s.startswith("🔓")]
+    set_status(client, "6943", "GOLD", "3")
+    m.tick()
+    reopen = [s for s in sent if s.startswith("🔓")]
+    assert len(reopen) == 1 and "GOLD ₹295: filling fast 🟡 → available 🟢" in reopen[0]

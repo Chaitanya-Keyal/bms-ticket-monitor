@@ -18,8 +18,9 @@ from .store import Store
 
 log = logging.getLogger(__name__)
 MAX_DATES = 3  # dates checked per version when a watch names none
-STATUS_ICON = {"3": "🟢", "2": "🟠", "1": "🟡", "0": "🔴"}
-RANK = {"0": 0, "1": 1, "2": 2, "3": 3}  # sold out < almost full < filling fast < available
+# BMS order, fewest seats first: sold out, almost full, filling fast, available
+# (BMS paints both middle states orange; these icons read in order instead)
+STATUS_ICON = {"3": "🟢", "2": "🟡", "1": "🟠", "0": "🔴"}
 
 
 @dataclass
@@ -264,9 +265,9 @@ class Monitor:
     REOPEN_COOLDOWN = 600  # a category that keeps flipping alerts at most every 10 minutes
 
     def deliver_reopened(self, r: Result) -> bool:
-        """Seat-release alerts: a watched category's availability improved (sold out -> any seats,
-        almost full -> filling fast/available, filling fast -> available). The first sighting of
-        a category only records it. Returns True if an alert was sent."""
+        """Seat-release alerts for steps that matter: sold out -> any seats, or almost full /
+        filling fast -> available. (almost full -> filling fast is orange -> orange on BMS, so it
+        isn't alerted.) The first sighting of a category only records it. Returns True if sent."""
         key, now = r.watch.key, int(time.time())
         events, seen = [], []
         for v, s in r.tracked:
@@ -274,8 +275,8 @@ class Monitor:
                 if not category_watched(r.watch, c.name):
                     continue
                 prev, alerted = self.store.seat(key, s.key, c.name)
-                if (prev in RANK and c.status in RANK and RANK[c.status] > RANK[prev]
-                        and now - (alerted or 0) >= self.REOPEN_COOLDOWN):
+                better = (prev == "0" and c.status in ("1", "2", "3")) or (prev in ("1", "2") and c.status == "3")
+                if better and now - (alerted or 0) >= self.REOPEN_COOLDOWN:
                     events.append((v, s, c, prev))
                 else:
                     seen.append((s.key, c.name, c.status, alerted))
