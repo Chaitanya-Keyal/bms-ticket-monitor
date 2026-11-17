@@ -11,14 +11,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable
 
-from .bms import BmsClient, BmsError, MoviePage, Show, Variant
+from .bms import AVAILABILITY, BmsClient, BmsError, Category, MoviePage, Show, Variant
 from .config import Settings, Watch, load_watches
-from .matcher import show_matches, variants_to_check
+from .matcher import category_watched, show_matches, show_reopen_tracked, variants_to_check
 from .store import Store
 
 log = logging.getLogger(__name__)
 MAX_DATES = 3  # dates checked per version when a watch names none
 STATUS_ICON = {"3": "🟢", "2": "🟠", "1": "🟡", "0": "🔴"}
+RANK = {"0": 0, "1": 1, "2": 2, "3": 3}  # sold out < almost full < filling fast < available
 
 
 @dataclass
@@ -29,6 +30,7 @@ class Result:
     activated: bool = False  # BMS switched it on in the city, possibly before listing shows
     open_versions: list[Variant] = field(default_factory=list)
     matches: list[tuple[Variant, Show]] = field(default_factory=list)
+    tracked: list[tuple[Variant, Show]] = field(default_factory=list)  # seat-release watch
 
 
 def _variant_from_label(code: str, label: str) -> Variant:
@@ -83,6 +85,8 @@ def check_watch(client: BmsClient, watch: Watch, pause: Callable[[], None] = lam
                 seen.add(show.key)
                 if show_matches(watch, variant, show):
                     result.matches.append((variant, show))
+                if show_reopen_tracked(watch, variant, show):
+                    result.tracked.append((variant, show))
     return result
 
 
@@ -132,6 +136,23 @@ def shows_message(r: Result, new: list[tuple[Variant, Show]]) -> str:
             block.append(f"{e(venue)}: {times}")
         block.append(f'<a href="{e(r.watch.movie.booking_url(code, date_code))}">Book</a>')
         out.append("\n".join(block))
+    return "\n\n".join(out)
+
+
+def reopen_message(r: Result, events: list[tuple[Variant, Show, Category, str]]) -> str:
+    e = html.escape
+    venues = sorted({s.venue_name for _, s, _, _ in events})
+    out = [f"🔓 <b>{e(r.page.title)}</b>: more seats free at {e(', '.join(venues))}"]
+    groups: dict[tuple[str, str, str], list[str]] = {}
+    for v, s, c, prev in sorted(events, key=lambda x: (x[1].date_code, x[0].label, x[1].venue_name, x[1].time_code)):
+        line = (f"{e(s.venue_name)}: {e(s.time)}: {e(c.name)}"
+                f"{' ₹' + e(c.price.split('.')[0]) if c.price else ''}: "
+                f"{e(AVAILABILITY.get(prev, prev))} {STATUS_ICON.get(prev, '')} → "
+                f"{e(AVAILABILITY.get(c.status, c.status))} {STATUS_ICON.get(c.status, '')}".strip())
+        groups.setdefault((s.date_code, v.label, v.code), []).append(line)
+    for (date_code, label, code), lines in groups.items():
+        out.append("\n".join([f"<b>{e(_day(date_code))}{' · ' + e(label) if label else ''}</b>", *lines,
+                              f'<a href="{e(r.watch.movie.booking_url(code, date_code))}">Book</a>']))
     return "\n\n".join(out)
 
 
@@ -227,14 +248,42 @@ class Monitor:
             if self.send(opened_message(r)):
                 self.store.mark_opened(key)
         attempted = (r.open or r.activated) and self.ring(key, opening=True)
-        if not r.matches:
-            return
-        done = self.store.notified(key, [s.key for _, s in r.matches])
+        done = self.store.notified(key, [s.key for _, s in r.matches]) if r.matches else set()
         new = [(v, s) for v, s in r.matches if s.key not in done]
         if new and self.send(shows_message(r, new)):
             self.store.mark_notified(key, [s.key for _, s in new])
             if not attempted:  # at most one call attempt per movie per check
-                self.ring(key, opening=False)
+                attempted = self.ring(key, opening=False)
+        if r.tracked and self.deliver_reopened(r) and not attempted:
+            self.ring(key, opening=False)
+
+    REOPEN_COOLDOWN = 600  # a category that keeps flipping alerts at most every 10 minutes
+
+    def deliver_reopened(self, r: Result) -> bool:
+        """Seat-release alerts: a watched category's availability improved (sold out -> any seats,
+        almost full -> filling fast/available, filling fast -> available). The first sighting of
+        a category only records it. Returns True if an alert was sent."""
+        key, now = r.watch.key, int(time.time())
+        events, seen = [], []
+        for v, s in r.tracked:
+            for c in s.categories:
+                if not category_watched(r.watch, c.name):
+                    continue
+                prev, alerted = self.store.seat(key, s.key, c.name)
+                if (prev in RANK and c.status in RANK and RANK[c.status] > RANK[prev]
+                        and now - (alerted or 0) >= self.REOPEN_COOLDOWN):
+                    events.append((v, s, c, prev))
+                else:
+                    seen.append((s.key, c.name, c.status, alerted))
+        for show, cat, status, alerted in seen:
+            self.store.put_seat(key, show, cat, status, alerted)
+        if not events:
+            return False
+        if not self.send(reopen_message(r, events)):
+            return False  # statuses left as sold out, so the next check tries again
+        for _, s, c, _ in events:
+            self.store.put_seat(key, s.key, c.name, c.status, now)
+        return True
 
     CALL_WINDOW = 1800  # opening calls only within 30 min of it; later it's old news
 

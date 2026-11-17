@@ -24,14 +24,29 @@ def variants_to_check(watch: Watch, variants: list[Variant]) -> list[Variant]:
     return vs
 
 
+def _at(show: Show, cinemas: list[str]) -> bool:
+    return any(c.lower() in show.venue_name.lower() or c.upper() == show.venue_code for c in cinemas)
+
+
 def show_matches(watch: Watch, variant: Variant, show: Show) -> bool:
     if not show.available:
         return False
-    if watch.dates and show.date_code not in watch.dates:
+    if watch.cinemas and not _at(show, watch.cinemas):
         return False
-    if watch.cinemas and not any(
-        c.lower() in show.venue_name.lower() or c.upper() == show.venue_code for c in watch.cinemas
-    ):
+    return _in_filters(watch, variant, show)
+
+
+def show_reopen_tracked(watch: Watch, variant: Variant, show: Show) -> bool:
+    """Shows whose seat categories are watched for sold out -> seats again (sold-out shows too)."""
+    return bool(watch.reopen_cinemas) and _at(show, watch.reopen_cinemas) and _in_filters(watch, variant, show)
+
+
+def category_watched(watch: Watch, name: str) -> bool:
+    return not watch.reopen_categories or _has(name, watch.reopen_categories)
+
+
+def _in_filters(watch: Watch, variant: Variant, show: Show) -> bool:
+    if watch.dates and show.date_code not in watch.dates:
         return False
     if watch.formats and not _has(f"{variant.format} {show.screen_attr}", watch.formats):
         return False

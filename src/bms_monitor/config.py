@@ -22,6 +22,9 @@ class Watch:
     after: int | None = None  # HHMM, inclusive
     before: int | None = None  # HHMM, inclusive
     enabled: bool = True
+    # Seat-release alerts: at these cinemas, say when a sold-out seat category has seats again
+    reopen_cinemas: list[str] = field(default_factory=list)
+    reopen_categories: list[str] = field(default_factory=list)  # empty: every category
 
     @property
     def key(self) -> str:
@@ -70,6 +73,8 @@ def load_watches(path: Path) -> list[Watch]:
                 after=_time(raw.get("after")),
                 before=_time(raw.get("before")),
                 enabled=bool(raw.get("enabled", True)),
+                reopen_cinemas=_strings(raw, "reopen_cinemas"),
+                reopen_categories=_strings(raw, "reopen_categories"),
             ))
         except (KeyError, ValueError) as e:
             raise ValueError(f"watch #{i} in {path}: {e}") from e

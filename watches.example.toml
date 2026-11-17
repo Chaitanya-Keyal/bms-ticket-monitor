@@ -8,6 +8,9 @@
 # dates      e.g. ["2026-12-17", "2026-12-18"]   (omit: the first 3 bookable dates)
 # after, before  e.g. "18:00", "23:59"            (show start time, 24-hour)
 # enabled    false to pause a watch
+# reopen_cinemas     e.g. ["AMB Cinemas: Gachibowli"]  seat-release alerts at these cinemas: a seat
+#                    category's availability improves (sold out -> seats, almost full -> available...)
+# reopen_categories  e.g. ["PLATINUM", "RECLINER"]     only these categories (omit for all)
 
 [[watch]]
 name = "Example movie, IMAX evenings"

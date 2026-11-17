@@ -567,3 +567,89 @@ def test_call_numbers_with_labels():
     from bms_monitor.config import _numbers
     assert _numbers("Asha=+91 98000 00000, +919811111111,") == [("Asha", "+919800000000"), ("...1111", "+919811111111")]
     assert _numbers("") == []
+
+
+def _reopen_setup(tmp_path, extra=""):
+    import copy
+    from bms_monitor.config import Settings
+    wf = tmp_path / "watches.toml"
+    wf.write_text('[[watch]]\nname = "R"\nurl = "https://in.bookmyshow.com/hyderabad/movies/ramayana/ET00451914"\n'
+                  'languages = ["Telugu"]\nformats = ["2D"]\nreopen_cinemas = ["ALLU"]\n' + extra)
+    settings = Settings(wf, tmp_path / "s.db", 60, 0, None, None, "t", "c", None, call_min_gap=0)
+
+    class Client(FakeClient):
+        payload = copy.deepcopy(load("showtimes-open.json"))
+
+        def showtimes(self, region, code, date_code="", referer=""):
+            return parse_showtimes(self.payload, code)
+
+    def set_status(client, session, category, status):
+        for w in client.payload["data"]["showtimeWidgets"]:
+            for g in w.get("data") or []:
+                for card in g.get("data") or []:
+                    for st in card.get("showtimes") or []:
+                        if st["additionalData"].get("sessionId") == session:
+                            for c in st["additionalData"]["categories"]:
+                                if c["priceDesc"] == category:
+                                    c["availStatus"] = status
+
+    sent, calls = [], []
+    client = Client("page-open.html", "")
+    m = Monitor(settings, client, Store(settings.state_db), lambda msg: sent.append(msg) or True,
+                call=lambda t: calls.append(t) or True)
+    m.pause = lambda: None
+    return m, client, set_status, sent, calls
+
+
+def test_seats_back_in_a_sold_out_category(tmp_path):
+    m, client, set_status, sent, calls = _reopen_setup(tmp_path)
+    m.tick()  # first sighting: PLATINUM at ALLU 07:45 PM is sold out; only recorded
+    reopen = [s for s in sent if s.startswith("🔓")]
+    assert reopen == []
+    set_status(client, "6943", "PLATINUM", "3")
+    m.tick()
+    reopen = [s for s in sent if s.startswith("🔓")]
+    assert len(reopen) == 1 and "PLATINUM ₹350: sold out 🔴 → available 🟢" in reopen[0]
+    assert "ALLU Cinemas: Kokapet" in reopen[0] and "/buytickets/ET00518312/20261112" in reopen[0]
+    n_calls = len(calls)
+    assert n_calls >= 2  # opening call, then one for the released seats
+    set_status(client, "6943", "PLATINUM", "0")
+    m.tick()
+    set_status(client, "6943", "PLATINUM", "2")
+    m.tick()  # flipped back within 10 minutes: no second alert
+    assert len([s for s in sent if s.startswith("🔓")]) == 1
+
+
+def test_seat_release_only_for_chosen_categories(tmp_path):
+    m, client, set_status, sent, calls = _reopen_setup(tmp_path, 'reopen_categories = ["gold"]\n')
+    m.tick()
+    set_status(client, "6943", "PLATINUM", "3")
+    m.tick()
+    assert not [s for s in sent if s.startswith("🔓")]
+
+
+def test_failed_seat_alert_is_retried(tmp_path):
+    m, client, set_status, sent, calls = _reopen_setup(tmp_path)
+    m.tick()
+    set_status(client, "6943", "PLATINUM", "3")
+    ok = m.send
+    m.send = lambda msg: False if msg.startswith("🔓") else ok(msg)
+    m.tick()
+    m.send = ok
+    m.tick()
+    assert len([s for s in sent if s.startswith("🔓")]) == 1
+
+
+def test_almost_full_to_available_alerts_too(tmp_path):
+    m, client, set_status, sent, calls = _reopen_setup(tmp_path)
+    m.tick()  # GOLD at ALLU 07:45 PM starts "almost full"
+    set_status(client, "6943", "GOLD", "1")
+    m.tick()
+    assert not [s for s in sent if s.startswith("🔓")]  # no change, no alert
+    set_status(client, "6943", "GOLD", "3")
+    m.tick()
+    reopen = [s for s in sent if s.startswith("🔓")]
+    assert len(reopen) == 1 and "GOLD ₹295: almost full 🟡 → available 🟢" in reopen[0]
+    set_status(client, "6943", "GOLD", "2")
+    m.tick()  # getting worse never alerts
+    assert len([s for s in sent if s.startswith("🔓")]) == 1

@@ -25,6 +25,14 @@ create table if not exists health (
     alerted integer not null default 0
 );
 insert or ignore into health (id) values (1);
+create table if not exists seats (
+    watch text not null,
+    show text not null,
+    category text not null,
+    status text not null,
+    alerted integer,
+    primary key (watch, show, category)
+);
 create table if not exists meta (
     key text primary key,
     value text not null
@@ -80,6 +88,17 @@ class Store:
 
     def set_alerted(self, alerted: bool) -> None:
         self.db.execute("update health set alerted = ? where id = 1", [int(alerted)])
+        self.db.commit()
+
+    def seat(self, watch: str, show: str, category: str) -> tuple[str | None, int | None]:
+        row = self.db.execute("select status, alerted from seats where watch = ? and show = ? and category = ?",
+                              [watch, show, category]).fetchone()
+        return (row[0], row[1]) if row else (None, None)
+
+    def put_seat(self, watch: str, show: str, category: str, status: str, alerted: int | None) -> None:
+        self.db.execute("insert into seats values (?, ?, ?, ?, ?) on conflict (watch, show, category) "
+                        "do update set status = excluded.status, alerted = excluded.alerted",
+                        [watch, show, category, status, alerted])
         self.db.commit()
 
     def get(self, key: str) -> str | None:
