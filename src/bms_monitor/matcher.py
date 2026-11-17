@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from .bms import Show, Variant
 from .config import Watch
 
@@ -24,8 +26,19 @@ def variants_to_check(watch: Watch, variants: list[Variant]) -> list[Variant]:
     return vs
 
 
+def _norm(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
 def _at(show: Show, cinemas: list[str]) -> bool:
-    return any(c.lower() in show.venue_name.lower() or c.upper() == show.venue_code for c in cinemas)
+    """A cinema matches by its BMS code (e.g. PRHN) or by part of its name, ignoring case,
+    spaces and punctuation ("prasad" matches "Prasads Multiplex" and "Prasad's IMAX")."""
+    name = _norm(show.venue_name)
+    return any(c.strip().upper() == show.venue_code or (_norm(c) and _norm(c) in name) for c in cinemas)
+
+
+def at_priority_cinema(watch: Watch, show: Show) -> bool:
+    return bool(watch.priority_cinemas) and _at(show, watch.priority_cinemas)
 
 
 def show_matches(watch: Watch, variant: Variant, show: Show) -> bool:

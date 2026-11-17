@@ -13,7 +13,7 @@ from typing import Callable
 
 from .bms import AVAILABILITY, BmsClient, BmsError, Category, MoviePage, Show, Variant
 from .config import Settings, Watch, load_watches
-from .matcher import category_watched, show_matches, show_reopen_tracked, variants_to_check
+from .matcher import at_priority_cinema, category_watched, show_matches, show_reopen_tracked, variants_to_check
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -158,7 +158,7 @@ def reopen_message(r: Result, events: list[tuple[Variant, Show, Category, str]])
 
 class Monitor:
     def __init__(self, settings: Settings, client: BmsClient, store: Store, send: Callable[[str], bool],
-                 call: Callable[[str], bool] | None = None):
+                 call: Callable[..., bool] | None = None):
         self.settings = settings
         self.call = call
         self.client = client
@@ -247,15 +247,19 @@ class Monitor:
         if r.open and not self.store.was_opened(key):
             if self.send(opened_message(r)):
                 self.store.mark_opened(key)
-        attempted = (r.open or r.activated) and self.ring(key, opening=True)
+        self._called_now: set[str] = set()  # labels rung for this movie in this check
+        who = r.watch.call
+        attempted = (r.open or r.activated) and self.ring(key, opening=True, who=who)
         done = self.store.notified(key, [s.key for _, s in r.matches]) if r.matches else set()
         new = [(v, s) for v, s in r.matches if s.key not in done]
         if new and self.send(shows_message(r, new)):
             self.store.mark_notified(key, [s.key for _, s in new])
-            if not attempted:  # at most one call attempt per movie per check
-                attempted = self.ring(key, opening=False)
+            if r.watch.priority_call and any(at_priority_cinema(r.watch, s) for _, s in new):
+                attempted = self.ring(key, opening=False, who=r.watch.priority_call, priority=True) or attempted
+            elif not attempted:  # at most one ordinary call attempt per movie per check
+                attempted = self.ring(key, opening=False, who=who)
         if r.tracked and self.deliver_reopened(r) and not attempted:
-            self.ring(key, opening=False)
+            self.ring(key, opening=False, who=r.watch.reopen_call if r.watch.reopen_call is not None else who)
 
     REOPEN_COOLDOWN = 600  # a category that keeps flipping alerts at most every 10 minutes
 
@@ -287,14 +291,26 @@ class Monitor:
 
     CALL_WINDOW = 1800  # opening calls only within 30 min of it; later it's old news
 
-    def ring(self, key: str, opening: bool) -> bool:
-        """Ring the phone: once at a movie's first heads-up or opening (up to 3 tries if Twilio
-        fails), and after every new-shows alert. Never twice about one movie within call_min_gap.
-        Returns True if a call was attempted."""
-        if self.call is None:
+    PRIORITY_GAP = 120  # priority calls skip call_min_gap but don't re-ring within 2 minutes
+
+    def ring(self, key: str, opening: bool, who: list[str] | None = None, priority: bool = False) -> bool:
+        """Ring phones: once at a movie's first heads-up or opening (up to 3 tries if Twilio
+        fails), and after new-shows or seat alerts, never twice about one movie within
+        call_min_gap. A priority call (new show at a priority cinema) uses PRIORITY_GAP instead.
+        `who` limits it to those labels (None = everyone, [] = nobody); nobody is rung twice in
+        one check. Returns True if a call was attempted."""
+        if self.call is None or who == []:
+            return False
+        called = getattr(self, "_called_now", set())
+        if "*" in called:
+            return False
+        targets = None if who is None else [w for w in who if w not in called]
+        if targets == []:
             return False
         now = time.time()
-        if now - float(self.store.get(f"last-call:{key}") or 0) < self.settings.call_min_gap:
+        gap_key, gap = (f"last-priority-call:{key}", self.PRIORITY_GAP) if priority else \
+            (f"last-call:{key}", self.settings.call_min_gap)
+        if now - float(self.store.get(gap_key) or 0) < gap:
             return False
         if opening:
             if self.store.get(f"called:{key}"):
@@ -306,8 +322,9 @@ class Monitor:
             if tries >= 3:
                 return False
             self.store.put(f"call-tries:{key}", str(tries + 1))
-        if self.call(""):
-            self.store.put(f"last-call:{key}", str(int(now)))
+        called.update(targets if targets is not None else ["*"])
+        if self.call("", only=targets):
+            self.store.put(gap_key, str(int(now)))
             if opening:
                 self.store.put(f"called:{key}", str(int(now)))
         return True

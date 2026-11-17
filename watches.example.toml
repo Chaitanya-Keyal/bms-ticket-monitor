@@ -11,6 +11,11 @@
 # reopen_cinemas     e.g. ["AMB Cinemas: Gachibowli"]  seat-release alerts at these cinemas: a seat
 #                    category's availability improves (sold out -> seats, almost full -> available...)
 # reopen_categories  e.g. ["PLATINUM", "RECLINER"]     only these categories (omit for all)
+# Calls (labels from CALL_TO):
+# call               who is rung for this movie's alerts; omit = everyone, [] = nobody
+# priority_cinemas   e.g. ["PRHN", "Prasad"]  BMS cinema IDs or name parts (case/punctuation ignored)
+# priority_call      who is rung, at once, when a new show appears at a priority cinema
+# reopen_call        who seat-release alerts ring (omit = same as call)
 
 [[watch]]
 name = "Example movie, IMAX evenings"

@@ -27,10 +27,16 @@ class Caller:
         # no Timeout), e.g. https://webhooks.twilio.com/v1/Voice/Template/voice_speech_recognition
         self.twiml_url = twiml_url
 
-    def call(self, text: str = "") -> bool:
+    def call(self, text: str = "", only: list[str] | None = None) -> bool:
         """Ring every number. With text, read it twice; without, just ring and hang up when
         answered (the details are in Telegram). With twiml_url set, that URL decides what the call
-        plays instead. True if Twilio accepted at least one call."""
+        plays instead. `only` limits the call to those labels. True if Twilio accepted at least one."""
+        targets = [t for t in self.to_numbers if only is None or t[0] in only]
+        unknown = sorted(set(only or []) - {label for label, _ in self.to_numbers})
+        if unknown:
+            log.warning("not in CALL_TO, not called: %s", ", ".join(unknown))
+        if not targets:
+            return False
         if self.twiml_url:
             params = {"Url": self.twiml_url}
         else:
@@ -41,8 +47,8 @@ class Caller:
                 twiml = '<Response><Pause length="1"/><Hangup/></Response>'
             params = {"Twiml": twiml, "Timeout": "45"}
         # All numbers at once, so every phone rings at the same time.
-        with ThreadPoolExecutor(max_workers=len(self.to_numbers)) as pool:
-            return any(list(pool.map(lambda t: self._call_one(*t, params), self.to_numbers)))
+        with ThreadPoolExecutor(max_workers=len(targets)) as pool:
+            return any(list(pool.map(lambda t: self._call_one(*t, params), targets)))
 
     def _call_one(self, label: str, to: str, params: dict) -> bool:
         body = urllib.parse.urlencode({"To": to, "From": self.from_number, **params}).encode()

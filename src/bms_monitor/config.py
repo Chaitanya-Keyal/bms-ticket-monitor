@@ -25,6 +25,12 @@ class Watch:
     # Seat-release alerts: at these cinemas, say when a sold-out seat category has seats again
     reopen_cinemas: list[str] = field(default_factory=list)
     reopen_categories: list[str] = field(default_factory=list)  # empty: every category
+    # Calls: `call` = labels (from CALL_TO) rung for this movie's alerts; None = everyone.
+    # A new show at a priority cinema rings `priority_call` at once, ignoring the call gap.
+    call: list[str] | None = None
+    priority_cinemas: list[str] = field(default_factory=list)
+    priority_call: list[str] = field(default_factory=list)
+    reopen_call: list[str] | None = None  # who seat-release alerts ring; None = same as `call`
 
     @property
     def key(self) -> str:
@@ -75,6 +81,10 @@ def load_watches(path: Path) -> list[Watch]:
                 enabled=bool(raw.get("enabled", True)),
                 reopen_cinemas=_strings(raw, "reopen_cinemas"),
                 reopen_categories=_strings(raw, "reopen_categories"),
+                call=_strings(raw, "call") if "call" in raw else None,
+                priority_cinemas=_strings(raw, "priority_cinemas"),
+                priority_call=_strings(raw, "priority_call"),
+                reopen_call=_strings(raw, "reopen_call") if "reopen_call" in raw else None,
             ))
         except (KeyError, ValueError) as e:
             raise ValueError(f"watch #{i} in {path}: {e}") from e

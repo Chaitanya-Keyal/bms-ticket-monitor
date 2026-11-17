@@ -470,7 +470,7 @@ def _call_settings(tmp_path, gap=300):
 def test_opening_call_retries_up_to_3_times(tmp_path):
     calls, ok = [], [False]
     m = Monitor(_call_settings(tmp_path), FakeClient("page-open.html", "showtimes-open.json"),
-                Store(tmp_path / "s.db"), lambda msg: True, call=lambda t: calls.append(t) or ok[0])
+                Store(tmp_path / "s.db"), lambda msg: True, call=lambda t, only=None: calls.append(t) or ok[0])
     m.pause = lambda: None
     for _ in range(5):
         m.tick()
@@ -486,7 +486,7 @@ def test_new_shows_ring_again_after_the_gap(tmp_path):
     client = FakeClient("page-open.html", "showtimes-open.json")
     store = Store(tmp_path / "s.db")
     m = Monitor(_call_settings(tmp_path, gap=300), client, store, lambda msg: True,
-                call=lambda t: calls.append(t) or True)
+                call=lambda t, only=None: calls.append(t) or True)
     m.pause = lambda: None
     m.tick()
     assert len(calls) == 1  # opening and its shows: one call
@@ -557,7 +557,7 @@ def test_no_call_for_an_opening_that_is_old_news(tmp_path):
     store.db.commit()
     calls = []
     m = Monitor(settings, FakeClient("page-open.html", "showtimes-open.json"), store,
-                lambda msg: True, call=lambda t: calls.append(t) or True)
+                lambda msg: True, call=lambda t, only=None: calls.append(t) or True)
     m.pause = lambda: None
     m.tick()
     assert calls == []
@@ -596,7 +596,7 @@ def _reopen_setup(tmp_path, extra=""):
     sent, calls = [], []
     client = Client("page-open.html", "")
     m = Monitor(settings, client, Store(settings.state_db), lambda msg: sent.append(msg) or True,
-                call=lambda t: calls.append(t) or True)
+                call=lambda t, only=None: calls.append(t) or True)
     m.pause = lambda: None
     return m, client, set_status, sent, calls
 
@@ -653,3 +653,62 @@ def test_almost_full_to_available_alerts_too(tmp_path):
     set_status(client, "6943", "GOLD", "2")
     m.tick()  # getting worse never alerts
     assert len([s for s in sent if s.startswith("🔓")]) == 1
+
+
+def test_cinema_match_by_code_or_name_without_false_friends():
+    from bms_monitor.bms import Show
+    from bms_monitor.matcher import _at
+    def show(code, name):
+        return Show("E", code, name, "1", "20261217", "7 PM", "1900", "", "3")
+    cinemas = ["AMBH", "PRHN", "amb cinemas", "prasad"]
+    assert _at(show("AMBH", "Totally Renamed"), cinemas)          # by ID
+    assert _at(show("NEW1", "AMB Cinemas: Kokapet IMAX"), cinemas)  # new AMB, no known ID
+    assert _at(show("PRX2", "Prasad's Large Screen"), cinemas)      # punctuation ignored
+    assert not _at(show("PVUM", "PVR: Musarambagh, Hyderabad"), cinemas)
+    assert not _at(show("SRCA", "Sree Ramana 70MM: Amberpet"), cinemas)
+    assert not _at(show("PRCS", "Prashant Cinema: Secunderabad"), cinemas)
+
+
+def test_priority_cinema_rings_everyone_listed_and_skips_the_gap(tmp_path):
+    import copy, json
+    from bms_monitor.config import Settings
+    wf = tmp_path / "watches.toml"
+    wf.write_text('[[watch]]\nname = "R"\nurl = "https://in.bookmyshow.com/hyderabad/movies/ramayana/ET00451914"\n'
+                  'languages = ["Telugu"]\nformats = ["2D"]\ncall = []\n'
+                  'priority_cinemas = ["PRHN", "prasad"]\npriority_call = ["Me", "A", "B"]\n')
+    settings = Settings(wf, tmp_path / "s.db", 60, 0, None, None, "t", "c", None, call_min_gap=300)
+
+    class Client(FakeClient):
+        payload = copy.deepcopy(load("showtimes-open.json"))
+
+        def showtimes(self, region, code, date_code="", referer=""):
+            return parse_showtimes(self.payload, code)
+
+    def add_venue(client, code, name, session):
+        groups = client.payload["data"]["showtimeWidgets"][1]["data"][0]["data"]
+        card = copy.deepcopy(groups[0])
+        card["additionalData"]["venueCode"], card["additionalData"]["venueName"] = code, name
+        for st in card["showtimes"]:
+            st["additionalData"]["sessionId"] = session + st["additionalData"]["sessionId"]
+        groups.append(card)
+
+    rings = []
+    client = Client("page-open.html", "")
+    store = Store(settings.state_db)
+    m = Monitor(settings, client, store, lambda msg: True, call=lambda t, only=None: rings.append(only) or True)
+    m.pause = lambda: None
+    m.tick()
+    assert rings == []  # opened + shows elsewhere: call = [] so Telegram only
+    add_venue(client, "XXXX", "Some Other Cinema", "o")
+    m.tick()
+    assert rings == []
+    add_venue(client, "PRHN", "Prasads Multiplex: Hyderabad", "p")
+    m.tick()
+    assert rings == [["Me", "A", "B"]]  # rung at once, everyone listed, once
+    add_venue(client, "PRHN", "Prasads Multiplex: Hyderabad", "q")
+    m.tick()
+    assert len(rings) == 1  # another Prasads batch within 2 minutes: Telegram only
+    store.put("last-priority-call:hyderabad:ET00451914", "0")
+    add_venue(client, "PRX9", "Prasad's Large Screen", "r")
+    m.tick()
+    assert len(rings) == 2

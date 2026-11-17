@@ -22,7 +22,9 @@ Every minute (randomised a little), for each watch:
      dates and screens trigger new messages; nothing is sent twice. Full scans
      run every minute for the first hour after opening, then every 2 minutes
      (`BMS_OPEN_FAST_FOR`, `BMS_OPEN_INTERVAL`) since they cost the most requests.
-   - optionally a **phone call** (Twilio) to one or more numbers: it just rings,
+   - optionally a **phone call** (Twilio) to one or more numbers, chosen per movie
+     (`call`), with **priority cinemas** whose new shows ring a chosen list at once
+     (`priority_cinemas`, `priority_call`); cinemas match by BMS ID or name. It just rings,
      at a movie's first heads-up or opening and after every new-shows alert, at
      most once per movie every 5 minutes (`CALL_MIN_GAP`);
    - optional **seat-release alerts** at chosen cinemas (`reopen_cinemas`): when a
