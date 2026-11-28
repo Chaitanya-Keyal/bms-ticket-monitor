@@ -46,6 +46,8 @@ def show_matches(watch: Watch, variant: Variant, show: Show) -> bool:
         return False
     if watch.cinemas and not _at(show, watch.cinemas):
         return False
+    if watch.skip_cinemas and _at(show, watch.skip_cinemas):
+        return False
     return _in_filters(watch, variant, show)
 
 

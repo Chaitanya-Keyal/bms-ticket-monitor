@@ -18,6 +18,7 @@ class Watch:
     languages: list[str] = field(default_factory=list)
     formats: list[str] = field(default_factory=list)
     cinemas: list[str] = field(default_factory=list)
+    skip_cinemas: list[str] = field(default_factory=list)  # never these, even if `cinemas` matches
     dates: list[str] = field(default_factory=list)  # YYYYMMDD
     after: int | None = None  # HHMM, inclusive
     before: int | None = None  # HHMM, inclusive
@@ -75,6 +76,7 @@ def load_watches(path: Path) -> list[Watch]:
                 languages=_strings(raw, "languages"),
                 formats=_strings(raw, "formats"),
                 cinemas=_strings(raw, "cinemas"),
+                skip_cinemas=_strings(raw, "skip_cinemas"),
                 dates=[_date(d) for d in _strings(raw, "dates")],
                 after=_time(raw.get("after")),
                 before=_time(raw.get("before")),

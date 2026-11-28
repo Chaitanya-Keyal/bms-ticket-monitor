@@ -669,6 +669,20 @@ def test_cinema_match_by_code_or_name_without_false_friends():
     assert not _at(show("PRCS", "Prashant Cinema: Secunderabad"), cinemas)
 
 
+def test_skip_cinemas_drops_a_cinema_the_name_filter_catches():
+    from bms_monitor.bms import Category, Show
+    w = Watch(name="t", movie=MovieRef("hyderabad", "m", "ET1"),
+              cinemas=["AMB Classic", "AMB Victory", "AMB Cinemas", "IMAX"], skip_cinemas=["AMBH"])
+    v = Variant("English", "IMAX 2D", "ET1")
+    def show(code, name):
+        return Show("E", code, name, "1", "20261218", "7 PM", "1900", "", "3", [Category("GOLD", "300", "3")])
+    assert not show_matches(w, v, show("AMBH", "AMB Cinemas: Gachibowli"))
+    assert show_matches(w, v, show("AMBV", "AMB Victory Cinemas: RTC X Roads"))
+    assert show_matches(w, v, show("ACSR", "AMB Classic Sudarshan: RTC X Roads"))
+    assert show_matches(w, v, show("NEW9", "Sudarshan IMAX with Laser: RTC X Roads"))
+    assert not show_matches(w, v, show("PRHN", "Prasads Multiplex: Hyderabad"))
+
+
 def test_priority_cinema_rings_everyone_listed_and_skips_the_gap(tmp_path):
     import copy, json
     from bms_monitor.config import Settings

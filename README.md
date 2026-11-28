@@ -67,7 +67,8 @@ after = "18:00"
 
 All filters are optional, case-insensitive and match on parts of names
 (`"AMB"` matches "AMB Cinemas: Gachibowli"). Within a filter any value matches;
-across filters all must match. Get the URL by opening the movie on BookMyShow
+across filters all must match. `skip_cinemas` drops cinemas that `cinemas` would
+otherwise catch (`cinemas = ["AMB"]`, `skip_cinemas = ["AMBH"]`: every AMB but Gachibowli). Get the URL by opening the movie on BookMyShow
 in your city and copying the address.
 
 ## Running

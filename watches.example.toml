@@ -5,6 +5,7 @@
 # languages  e.g. ["English", "Hindi"]           (any listed matches; omit for all)
 # formats    e.g. ["IMAX"], ["4DX"], ["LASER"]   (matches the version name or the screen type)
 # cinemas    e.g. ["Prasads", "AMB"]              (part of the cinema name, or its BMS code)
+# skip_cinemas e.g. ["AMBH"]                     never these, even if `cinemas` matches them
 # dates      e.g. ["2026-12-17", "2026-12-18"]   (omit: the first 3 bookable dates)
 # after, before  e.g. "18:00", "23:59"            (show start time, 24-hour)
 # enabled    false to pause a watch
